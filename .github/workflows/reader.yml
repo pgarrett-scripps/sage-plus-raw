@@ -51,7 +51,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly-2026-09-26
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-09-26
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
