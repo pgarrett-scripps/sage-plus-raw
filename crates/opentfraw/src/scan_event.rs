@@ -183,6 +183,12 @@ impl ScanEvent {
         is_tribrid_dep: bool,
     ) -> Result<Self> {
         let body = r.read_bytes(body_size)?;
+        if body_size >= 4 {
+            let count = crate::bytes::read_u32_le(&body, 0)? as usize;
+            if (2..=64).contains(&count) {
+                return crate::qualified_events::multiplexed(preamble, &body, count);
+            }
+        }
 
         // FractionCollector (scan window) location varies by instrument family:
         //   - Q Exactive / Exploris / Astral (body_size ≥ 136): offset 64

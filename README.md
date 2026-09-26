@@ -1,3 +1,9 @@
+# Private OpenTFRaw branch
+
+Native Rust Thermo RAW reader maintained for MSConvert RS. This branch includes qualified v66 event decoding, multiplexed precursor preservation and metadata corrections. See [review findings, validation and remaining limits](REVIEW.md).
+
+`cargo test --locked` targets the native reader by default. The original upstream documentation follows and describes capabilities beyond the layouts qualified in this branch.
+
 # OpenTFRaw
 
 [![CI](https://github.com/Sigilweaver/OpenTFRaw/actions/workflows/ci.yml/badge.svg)](https://github.com/Sigilweaver/OpenTFRaw/actions/workflows/ci.yml)

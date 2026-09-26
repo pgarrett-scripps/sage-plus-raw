@@ -446,22 +446,28 @@ impl RawFileReader {
         } else {
             r.read_u32()?
         };
-        // For v66, compute per-event body sizes from the stream's address range.
-        // The scan event stream spans [scan_trailer_addr+4 .. scan_params_addr).
-        // Each event = preamble (136 bytes) + body.
-        //
-        // Simple instruments (Q Exactive, Exploris): all events are identical in
-        // size so stream_bytes divides evenly by n_events.
-        //
-        // Tribrid instruments (Eclipse, Fusion Lumos): primary (MS1) scans and
-        // dependent (MS2+) scans have different body layouts:
-        //   Primary event:   232 bytes total (preamble 136 + body 96)
-        //   Dependent event: 344 bytes total (preamble 136 + body 208)
-        // Confirmed empirically across Orbitrap Eclipse (EThcD) and Fusion Lumos
-        // (DIA, MS3) files.
-        let preamble_size = ScanEventPreamble::size_for_version(version);
-        let (v66_body_primary, v66_body_dependent): (usize, usize) =
-            if version >= 66 && n_events > 0 {
+        let scan_events = if let Some(events) =
+            crate::qualified_events::read(&mut r, version, n_events, run_header.scan_params_addr)?
+        {
+            events
+        } else {
+            // For v66, compute per-event body sizes from the stream's address range.
+            // The scan event stream spans [scan_trailer_addr+4 .. scan_params_addr).
+            // Each event = preamble (136 bytes) + body.
+            //
+            // Simple instruments (Q Exactive, Exploris): all events are identical in
+            // size so stream_bytes divides evenly by n_events.
+            //
+            // Tribrid instruments (Eclipse, Fusion Lumos): primary (MS1) scans and
+            // dependent (MS2+) scans have different body layouts:
+            //   Primary event:   232 bytes total (preamble 136 + body 96)
+            //   Dependent event: 344 bytes total (preamble 136 + body 208)
+            // Confirmed empirically across Orbitrap Eclipse (EThcD) and Fusion Lumos
+            // (DIA, MS3) files.
+            let preamble_size = ScanEventPreamble::size_for_version(version);
+            let (v66_body_primary, v66_body_dependent): (usize, usize) = if version >= 66
+                && n_events > 0
+            {
                 let stream_bytes = run_header
                     .scan_params_addr
                     .saturating_sub(run_header.scan_trailer_addr)
@@ -496,31 +502,34 @@ impl RawFileReader {
                                 (DEPENDENT_EVENT as usize).saturating_sub(preamble_size),
                             )
                         } else {
-                            // Fallback: use floor-average uniform body
-                            let body = ((stream_bytes / n) as usize).saturating_sub(preamble_size);
-                            (body, body)
+                            return Err(Error::InvalidScanEvent(
+                                "unsupported variable event layout".into(),
+                            ));
                         }
                     } else {
-                        // Fallback: use floor-average uniform body
-                        let body = ((stream_bytes / n) as usize).saturating_sub(preamble_size);
-                        (body, body)
+                        return Err(Error::InvalidScanEvent(
+                            "unsupported variable event layout".into(),
+                        ));
                     }
                 }
             } else {
                 (0, 0)
             };
-        // Each event consumes at least its preamble on disk (the body may add
-        // more, but the preamble alone is a safe lower bound for the count check).
-        r.check_count(n_events as u64, preamble_size as u64)?;
-        let mut scan_events = Vec::with_capacity(n_events as usize);
-        for _ in 0..n_events {
-            scan_events.push(ScanEvent::read(
-                &mut r,
-                version,
-                v66_body_primary,
-                v66_body_dependent,
-            )?);
-        }
+            // Each event consumes at least its preamble on disk (the body may add
+            // more, but the preamble alone is a safe lower bound for the count check).
+            r.check_count(n_events as u64, preamble_size as u64)?;
+            let mut scan_events = Vec::with_capacity(n_events as usize);
+            for _ in 0..n_events {
+                scan_events.push(ScanEvent::read(
+                    &mut r,
+                    version,
+                    v66_body_primary,
+                    v66_body_dependent,
+                )?);
+            }
+
+            scan_events
+        };
 
         // 9. Error log
         let n_errors = run_header.sample_info.error_log_length;

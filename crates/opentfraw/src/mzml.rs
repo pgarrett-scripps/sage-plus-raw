@@ -122,6 +122,17 @@ pub struct ScanMetadata {
     pub precursor: Option<PrecursorInfo>,
 }
 
+fn precursor_masses(
+    isolation: Option<f64>,
+    monoisotopic: Option<f64>,
+    reaction: Option<f64>,
+) -> (Option<f64>, Option<f64>) {
+    let valid = |x: &f64| x.is_finite() && *x > 0.0;
+    let target = isolation.filter(valid).or_else(|| reaction.filter(valid));
+    let selected = monoisotopic.filter(valid).or(target);
+    (target, selected)
+}
+
 /// Extract the metadata of the scan at scan-index `idx` (zero-based offset
 /// from the first scan), without reading its peak arrays.
 ///
@@ -129,7 +140,8 @@ pub struct ScanMetadata {
 /// index, scan event and trailer. [`extract_spectrum`], the mzML writer, the
 /// `openmassspec_core` adapter and the Python bindings all build on it, so a
 /// field wired here reaches every output. Returns `None` if `idx` is out of
-/// range.
+/// range. Multiplexed reactions remain available in `raw.scan_events`.
+/// The singular precursor field is unavailable for these scans.
 pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
     if idx >= raw.num_scans {
         return None;
@@ -174,12 +186,12 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
         None
     };
 
-    let precursor = if !is_ms1 {
+    let precursor = if !is_ms1 && event.is_none_or(|e| e.reactions.len() <= 1) {
         let info = if let Some(q1) = srm_q1 {
             PrecursorInfo {
                 target_mz: Some(q1),
                 selected_mz: Some(q1),
-                isolation_width: Some(0.7),
+                isolation_width: None,
                 charge: None,
                 collision_energy: srm_ce,
                 ce_is_nce: false,
@@ -189,22 +201,11 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
             }
         } else {
             let reaction = event.and_then(|e| e.reactions.first());
-            let tm = params
-                .as_ref()
-                .and_then(|p| p.isolation_target_mz())
-                .filter(|&mz| mz > 0.0)
-                .or_else(|| {
-                    params
-                        .as_ref()
-                        .and_then(|p| p.monoisotopic_mz())
-                        .filter(|&mz| mz > 0.0)
-                })
-                .or_else(|| reaction.map(|r| r.precursor_mz).filter(|&mz| mz > 0.0));
-            let sm = params
-                .as_ref()
-                .and_then(|p| p.monoisotopic_mz())
-                .filter(|&mz| mz > 0.0)
-                .or(tm);
+            let (tm, sm) = precursor_masses(
+                params.as_ref().and_then(|p| p.isolation_target_mz()),
+                params.as_ref().and_then(|p| p.monoisotopic_mz()),
+                reaction.map(|r| r.precursor_mz),
+            );
             let iw = params.as_ref().and_then(|p| p.isolation_width_mz());
             let ch = params
                 .as_ref()
@@ -880,6 +881,15 @@ where
     R: Read + Seek,
     W: Write,
 {
+    if raw
+        .scan_events
+        .iter()
+        .any(|event| event.reactions.len() > 1)
+    {
+        return Err(crate::Error::UnsupportedOperation(
+            "mzML export cannot represent multiple precursor reactions",
+        ));
+    }
     let mut src = OpenTfRawSource::new(raw, source, raw_filename, include_profile);
     msc::write_mzml(&mut src, out)?;
     Ok(())
@@ -903,6 +913,15 @@ where
     R: Read + Seek,
     W: Write,
 {
+    if raw
+        .scan_events
+        .iter()
+        .any(|event| event.reactions.len() > 1)
+    {
+        return Err(crate::Error::UnsupportedOperation(
+            "mzML export cannot represent multiple precursor reactions",
+        ));
+    }
     let mut src = OpenTfRawSource::new(raw, source, raw_filename, include_profile);
     msc::write_indexed_mzml(&mut src, out)?;
     Ok(())
@@ -912,6 +931,22 @@ where
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn isolation_target_is_not_inferred_from_monoisotopic_mass() {
+        assert_eq!(
+            precursor_masses(None, Some(499.8), Some(500.0)),
+            (Some(500.0), Some(499.8))
+        );
+        assert_eq!(
+            precursor_masses(None, Some(499.8), None),
+            (None, Some(499.8))
+        );
+        assert_eq!(
+            precursor_masses(Some(501.0), Some(f64::NAN), Some(500.0)),
+            (Some(501.0), Some(501.0))
+        );
+    }
 
     #[test]
     fn tic_record_maps_pairs_and_converts_minutes_to_seconds() {

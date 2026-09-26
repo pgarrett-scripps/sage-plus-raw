@@ -2,6 +2,9 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("invalid scan event: {0}")]
+    InvalidScanEvent(String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

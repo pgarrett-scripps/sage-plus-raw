@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/opentfraw", "crates/opentfraw-py"]
+default-members = ["crates/opentfraw"]
 
 [workspace.package]
 version = "1.6.0"
@@ -8,7 +9,7 @@ edition = "2021"
 rust-version = "1.85"
 authors = ["Nathan Riley <git@nathanriley.com>"]
 license = "Apache-2.0"
-repository = "https://github.com/Sigilweaver/OpenTFRaw"
+repository = "https://github.com/pgarrett-scripps/opentfraw"
 homepage = "https://sigilweaver.app/opentfraw/"
 documentation = "https://sigilweaver.app/opentfraw/docs/"
 keywords = ["mass-spectrometry", "thermo", "raw", "proteomics", "orbitrap"]
