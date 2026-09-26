@@ -233,7 +233,12 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
     };
 
     let ion_injection_time_ms = params.as_ref().and_then(|p| p.ion_injection_time_ms());
-    let faims_cv = params.as_ref().and_then(|p| p.faims_cv());
+    let faims_cv = params.as_ref().and_then(|p| {
+        (p.faims_voltage_on() == Some(true))
+            .then(|| p.faims_cv())
+            .flatten()
+            .filter(|value| value.is_finite())
+    });
 
     Some(ScanMetadata {
         index: idx as usize,

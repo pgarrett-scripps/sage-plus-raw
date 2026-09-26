@@ -366,3 +366,32 @@ fn failures_retain_scan_offsets_categories_and_io_sources() {
         matches!(error.root_cause(), opentfraw::Error::Io(source) if source.kind() == io::ErrorKind::BrokenPipe)
     );
 }
+
+#[test]
+#[ignore = "requires downloaded public fixtures, run by CI"]
+fn faims_requires_explicit_enablement_and_preserves_active_zero() {
+    use opentfraw::generic_data::GenericValue;
+    let mut raw = RawFileReader::open_path(fixture("BSA-FT-HCD.raw")).unwrap();
+    for (enabled, voltage, expected) in [
+        (Some(GenericValue::Bool(false)), 0.0, None),
+        (Some(GenericValue::Bool(false)), -45.0, None),
+        (Some(GenericValue::Bool(true)), 0.0, Some(0.0)),
+        (Some(GenericValue::Bool(true)), -45.0, Some(-45.0)),
+        (Some(GenericValue::Bool(true)), f64::NAN, None),
+        (Some(GenericValue::String(" On ".into())), 0.0, Some(0.0)),
+        (Some(GenericValue::String("Off".into())), -45.0, None),
+        (Some(GenericValue::String("not on".into())), -45.0, None),
+        (None, -45.0, None),
+    ] {
+        let params = &mut raw.scan_parameters[0].values;
+        params.retain(|(key, _)| key != "FAIMS CV:" && key != "FAIMS Voltage On:");
+        params.push(("FAIMS CV:".into(), GenericValue::Float64(voltage)));
+        if let Some(enabled) = enabled {
+            params.push(("FAIMS Voltage On:".into(), enabled));
+        }
+        assert_eq!(
+            opentfraw::scan_metadata(&raw, 0).unwrap().faims_cv,
+            expected
+        );
+    }
+}

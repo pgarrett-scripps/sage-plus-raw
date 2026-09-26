@@ -255,7 +255,8 @@ impl<'a> ScanParams<'a> {
         None
     }
 
-    /// FAIMS compensation voltage in V (Orbitrap Fusion/Lumos with FAIMS Pro).
+    /// Raw FAIMS compensation voltage in V, including inactive trailer values.
+    /// Scientific scan metadata emits it only when FAIMS is explicitly enabled.
     pub fn faims_cv(&self) -> Option<f64> {
         self.0
             .get_f64("FAIMS CV:")
@@ -266,7 +267,11 @@ impl<'a> ScanParams<'a> {
     pub fn faims_voltage_on(&self) -> Option<bool> {
         match self.0.get("FAIMS Voltage On:")? {
             GenericValue::Bool(b) => Some(*b),
-            GenericValue::String(s) => Some(s.to_ascii_lowercase().contains("on")),
+            GenericValue::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+                "on" | "true" => Some(true),
+                "off" | "false" => Some(false),
+                _ => None,
+            },
             _ => None,
         }
     }

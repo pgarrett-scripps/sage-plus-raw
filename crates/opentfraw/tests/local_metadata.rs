@@ -15,6 +15,13 @@ fn local_metadata_regressions() {
         scans += 1;
         peaks += spectrum.mz.len();
         assert_eq!(spectrum.scan_mode, Some(opentfraw::ScanMode::Centroid));
+        assert_eq!(spectrum.faims_cv, None);
+        assert_eq!(
+            raw.scan_params(spectrum.scan_number)
+                .unwrap()
+                .faims_voltage_on(),
+            Some(false)
+        );
     }
     assert_eq!(scans, 5445);
     assert_eq!(peaks, 470235);
