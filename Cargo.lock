@@ -148,7 +148,7 @@ dependencies = [
 
 [[package]]
 name = "opentfraw-py"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "numpy",
  "openmassspec-core",
@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "opentfraw-reader"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "openmassspec-core",
  "thiserror",

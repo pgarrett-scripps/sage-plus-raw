@@ -8,6 +8,12 @@
     "FT-HCD-MSX.raw": "b3d97b3856dd1e8dd6846d21c58b1b1824c309480908fe4c2dfabe152bd6dd7b",
     "IsolationMzOffset-ReportedMassOffset.raw": "e211d5c55995b5c3538798dc59d81454d00536561d8be66626c35f69414d80cb",
     "IT-HCD-SPS.raw": "c18f8d01e3400702c551b7258d2bc15e2fb78452ac98108709b0956c41d4c465",
-    "source_cid_test_3scans.raw": "540856ef9a02b533b499519abb0b3fa7d60a0c75d0c8c5f2c39452ef6d41d19c"
+    "source_cid_test_3scans.raw": "540856ef9a02b533b499519abb0b3fa7d60a0c75d0c8c5f2c39452ef6d41d19c",
+    "BSA-FT-ETD-centroid.mzML": "a02ed3371f59a27f073c2b7fb5d8e2a28fc39d01e549ae408d654a6d9289793e",
+    "BSA-FT-HCD-centroid.mzML": "b9d01506e6f2a78285e069232e2c72d51b9a9acf1d2641e04fb0c65dbed2ce89",
+    "FT-HCD-MSX.mzML": "c79d0ebaf919d1c4388857ae482bed516c72438b7e53467ef09d32ee48c4fff4",
+    "FT-HCD-MSX-centroid.mzML": "dfd96749ecab47db807a01f1a718603dbf0b512f5dbc28414d57487df5d3576a",
+    "IsolationMzOffset-ReportedMassOffset.mzML": "d80195c22731e1c157756d1f55f233c61580b7566d34cc97825a69cc40cf3cb7",
+    "IsolationMzOffset-ReportedMassOffset-centroid.mzML": "cb95d6779d6226452217fbf8fe755d3d8b899c1d996f02805334e3690ab6a606"
   }
 }

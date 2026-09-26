@@ -22,9 +22,11 @@ use crate::RawFileReader;
 
 // Preserve the established extraction API paths for downstream callers.
 use crate::spectrum::{decode_spectrum, DecodedSpectrum};
+#[allow(deprecated)]
 pub use crate::spectrum::{
-    extract_spectrum, iter_spectra, scan_metadata, try_extract_spectrum, try_iter_spectra,
-    PrecursorInfo, ScanMetadata, SpectrumRecord,
+    extract_spectrum, iter_spectra, scan_metadata, try_extract_spectrum,
+    try_extract_spectrum_arrays, try_iter_spectra, PrecursorInfo, ScanMetadata, SpectrumArrays,
+    SpectrumRecord,
 };
 
 // -- Adapter / canonical writer wrappers --
@@ -415,16 +417,26 @@ impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
     /// Write mzML and propagate source failures as well as output failures.
     /// On any error, discard the output because it may contain a partial run.
     pub fn write_mzml<W: Write>(&mut self, out: &mut W) -> Result<()> {
-        validate_export(self.raw)?;
-        msc::write_mzml(self, out)?;
-        self.finish()
+        let result = (|| {
+            validate_export(self.raw)?;
+            msc::write_mzml(self, out)?;
+            self.finish()
+        })();
+        result.map_err(|error: crate::Error| {
+            error.with_context(crate::ErrorContext::new(crate::Operation::WriteMzml))
+        })
     }
 
     /// Write indexed mzML with strict source error propagation.
     pub fn write_indexed_mzml<W: Write>(&mut self, out: &mut W) -> Result<()> {
-        validate_export(self.raw)?;
-        msc::write_indexed_mzml(self, out)?;
-        self.finish()
+        let result = (|| {
+            validate_export(self.raw)?;
+            msc::write_indexed_mzml(self, out)?;
+            self.finish()
+        })();
+        result.map_err(|error: crate::Error| {
+            error.with_context(crate::ErrorContext::new(crate::Operation::WriteIndexedMzml))
+        })
     }
 
     /// Choose which `opentfraw.*` values go into each spectrum's `extra`
@@ -509,6 +521,22 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
 }
 
 fn validate_export_scan(raw: &RawFileReader, idx: u32) -> Result<()> {
+    validate_export_scan_inner(raw, idx).map_err(|error| {
+        let number = raw
+            .run_header
+            .sample_info
+            .first_scan_number
+            .checked_add(idx);
+        let mut context = number
+            .map(|number| raw.scan_context(number, crate::Operation::ValidateExport))
+            .unwrap_or_else(|| crate::ErrorContext::new(crate::Operation::ValidateExport));
+        context.scan_index = Some(idx);
+        error.with_context(context)
+    })
+}
+
+fn validate_export_scan_inner(raw: &RawFileReader, idx: u32) -> Result<()> {
+    crate::spectrum::validate_scan_event(raw, idx)?;
     if let Some(event) = raw.scan_events.get(idx as usize) {
         if event.reactions.len() > 1 {
             return Err(crate::Error::UnsupportedOperation(

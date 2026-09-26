@@ -1,6 +1,6 @@
 # Thermo reader review and qualification
 
-Public-launch preparation renames the package to `opentfraw-reader 0.1.0-rc.1` while retaining the Rust library name `opentfraw`. No public release has occurred. The qualification below was completed for the preceding private release and remains the supported scope.
+Public-launch preparation renames the package to `opentfraw-reader 0.1.0-rc.2` while retaining the Rust library name `opentfraw`. No public release has occurred. The qualification below was completed for the preceding private release and remains the supported scope.
 
 Reviewed upstream OpenTFRaw 1.6.0 at `e300d34`, the private initial implementation at `5602402`, and consumer usage in MSConvert RS. The private release is `1.6.1-private.1`. This is a scoped parser and scientific metadata qualification, not a claim that every RAW revision has been validated.
 
@@ -62,3 +62,9 @@ cargo test --locked -p opentfraw-reader --test local_metadata -- --ignored
 Pin the private Git revision or release tag. Use the strict APIs and preserve unsupported-mode gates during consumer integration. Consumer migration is separate from parser release qualification.
 
 Upstream history and Apache-2.0 attribution are retained. The upstream remote remains `https://github.com/Sigilweaver/OpenTFRaw`.
+
+## Candidate rc.2 qualification
+
+Eight public fixture regressions cover activation, isolation metadata, strict error categories and contexts, export failures and array qualification. Four RAW files are paired with immutable ProteoWizard centroid and profile references: BSA-FT-ETD, BSA-FT-HCD, FT-HCD-MSX and IsolationMzOffset-ReportedMassOffset. No new instrument-family support is claimed. Reference m/z and intensity arrays explicitly use 32-bit floats. Comparisons allow `f32::EPSILON` relative error, preserve peak ordering and check MS level and retention time. Profile references add zero-intensity padding that the reader does not synthesize. The checks compare stored nonzero bins after removing that reference padding. HCD, ETD and offset profiles contain 509, 200 and 1920 stored bins. MSX has stored centroids and remains blocked for singular-precursor XML export.
+
+Python runtime regressions verify strict error classes, profile precision, effective centroid metadata and complete flushed XML output. CI exercises public seeds through open, centroid and strict profile decoders under bounded address-sanitized fuzzing. Existing unsupported layouts remain blocked. Legacy lossy helpers remain callable with deprecation warnings. Consumer code should use strict APIs and inspect typed error context.

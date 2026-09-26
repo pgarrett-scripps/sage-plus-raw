@@ -49,7 +49,9 @@ pub(crate) fn multiplexed(
         .and_then(|n| n.checked_add(8))
         .ok_or_else(|| invalid("reaction count overflow"))?;
     if preamble.bytes.get(6).copied() != Some(2) || u32_at(body, fc - 4)? != 1 {
-        return Err(invalid("unsupported multiplexed event layout"));
+        return Err(Error::UnsupportedLayout(
+            "unsupported multiplexed event layout",
+        ));
     }
     let low_mz = f64_at(body, fc)?;
     let high_mz = f64_at(body, fc + 8)?;
@@ -62,7 +64,9 @@ pub(crate) fn multiplexed(
         || u32_at(body, fc + 60)? != 1
         || body[fc + 64..].iter().any(|&b| b != 0)
     {
-        return Err(invalid("unqualified multiplexed range or calibration"));
+        return Err(Error::UnsupportedLayout(
+            "unqualified multiplexed range or calibration",
+        ));
     }
     let mut reactions = Vec::with_capacity(count);
     for i in 0..count {
@@ -158,7 +162,9 @@ pub(crate) fn read<R: Read + Seek>(
             || preamble[40] != 4
             || preamble[10] != u8::from(preamble[6] == 2)
         {
-            return Err(invalid("unsupported qualified event preamble"));
+            return Err(Error::UnsupportedLayout(
+                "unsupported qualified event preamble",
+            ));
         }
         let size = if preamble[6] == 2 { 152 } else { 96 };
         if end.saturating_sub(reader.position()) < size as u64 {
@@ -181,7 +187,7 @@ fn decode(preamble: Vec<u8>, body: &[u8]) -> Result<ScanEvent> {
         || u32_at(body, fc - 4)? != 1
         || u32_at(body, fc + 16)? != 7
     {
-        return Err(invalid("unsupported record fields"));
+        return Err(Error::UnsupportedLayout("unsupported record fields"));
     }
     let low_mz = f64_at(body, fc)?;
     let high_mz = f64_at(body, fc + 8)?;
@@ -192,7 +198,9 @@ fn decode(preamble: Vec<u8>, body: &[u8]) -> Result<ScanEvent> {
         .map(|i| f64_at(body, fc + 20 + i * 8))
         .collect::<Result<Vec<_>>>()?;
     if coefficients[3] <= 0.0 || body[fc + 76..].iter().any(|&b| b != 0) {
-        return Err(invalid("invalid calibration or event tail"));
+        return Err(Error::UnsupportedLayout(
+            "unqualified calibration or event tail",
+        ));
     }
     let mut reactions = Vec::new();
     if ms2 {
@@ -205,7 +213,7 @@ fn decode(preamble: Vec<u8>, body: &[u8]) -> Result<ScanEvent> {
             || energy < 0.0
             || body[36..60].iter().any(|&b| b != 0)
         {
-            return Err(invalid("unsupported reaction metadata"));
+            return Err(Error::UnsupportedLayout("unsupported reaction metadata"));
         }
         reactions.push(Reaction {
             precursor_mz,

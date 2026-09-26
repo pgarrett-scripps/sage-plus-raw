@@ -21,6 +21,7 @@ jobs:
       - run: cargo clippy --locked -p opentfraw-reader --all-targets -- -D warnings
       - run: cargo test --locked -p opentfraw-reader
       - run: python scripts/fetch_public_fixtures.py
+      - run: python scripts/prepare_reference_arrays.py
       - run: cargo test --locked -p opentfraw-reader --test public_fixtures -- --ignored
         env:
           THERMO_PUBLIC_CORPUS: corpus/public
@@ -45,3 +46,38 @@ jobs:
         with:
           python-version: '3.12'
       - run: python scripts/registry_preflight.py
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly-2026-09-26
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cargo install cargo-fuzz --version 0.13.1 --locked
+      - run: python scripts/fetch_public_fixtures.py
+      - run: python scripts/seed_fuzz.py
+      - run: cargo metadata --locked --manifest-path crates/opentfraw/fuzz/Cargo.toml --format-version 1 > /dev/null
+      - name: Bounded public-fixture fuzzing
+        working-directory: crates/opentfraw
+        run: |
+          for target in open read_scan_peaks strict_decode
+          do
+            cargo fuzz run "$target" -- -max_total_time=20 -timeout=5 -rss_limit_mb=1024 -max_len=1048576 -seed=42
+          done
+  python-bindings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'maturin>=1.5,<2' numpy pytest
+      - run: python scripts/fetch_public_fixtures.py
+      - run: maturin build --locked --release --out /tmp/thermo-wheels
+      - run: python -m pip install /tmp/thermo-wheels/*.whl
+      - run: python -m pytest tests/test_strict_public.py tests/test_bindings.py
+        env:
+          PRIDE_RAW_NAME: public/BSA-FT-HCD.raw

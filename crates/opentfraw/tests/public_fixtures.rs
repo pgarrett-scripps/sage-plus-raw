@@ -249,3 +249,120 @@ fn instrument_terms_use_psi_ms_accessions_and_canonical_names() {
         assert_eq!(term.name, canonical);
     }
 }
+
+#[test]
+#[ignore = "requires normalized public references, run by CI"]
+fn full_precision_arrays_match_independent_proteowizard_references() {
+    use std::io::Read;
+    fn u32_value(reader: &mut impl Read) -> u32 {
+        let mut bytes = [0; 4];
+        reader.read_exact(&mut bytes).unwrap();
+        u32::from_le_bytes(bytes)
+    }
+    fn f64_value(reader: &mut impl Read) -> f64 {
+        let mut bytes = [0; 8];
+        reader.read_exact(&mut bytes).unwrap();
+        f64::from_le_bytes(bytes)
+    }
+    for name in [
+        "BSA-FT-ETD",
+        "BSA-FT-HCD",
+        "FT-HCD-MSX",
+        "IsolationMzOffset-ReportedMassOffset",
+    ] {
+        let path = fixture(&format!("{name}.raw"));
+        let raw = RawFileReader::open_path(&path).unwrap();
+        for profile in [false, true] {
+            let suffix = if profile { "" } else { "-centroid" };
+            let mut reference = File::open(fixture(&format!("{name}{suffix}.arrays"))).unwrap();
+            assert_eq!(u32_value(&mut reference), raw.num_scans, "{name}");
+            for _ in 0..raw.num_scans {
+                let idx = u32_value(&mut reference);
+                let level = u32_value(&mut reference);
+                let rt = f64_value(&mut reference);
+                let count = u32_value(&mut reference) as usize;
+                let arrays = opentfraw::try_extract_spectrum_arrays(
+                    &raw,
+                    &mut File::open(&path).unwrap(),
+                    idx,
+                    profile,
+                )
+                .unwrap();
+                assert_eq!(arrays.metadata.ms_level, level, "{name} scan {idx}");
+                assert!(
+                    (arrays.metadata.retention_time_min - rt).abs() < 1e-6,
+                    "{name} scan {idx} RT"
+                );
+                let pairs: Vec<_> = (0..count)
+                    .map(|_| (f64_value(&mut reference), f64_value(&mut reference)))
+                    .filter(|(_, intensity)| !profile || *intensity != 0.0)
+                    .collect();
+                assert_eq!(
+                    arrays.mz.len(),
+                    pairs.len(),
+                    "{name} scan {idx} profile={profile}"
+                );
+                for (peak, (mz, intensity)) in pairs.into_iter().enumerate() {
+                    assert!(
+                        (arrays.mz[peak] - mz).abs() <= f64::from(f32::EPSILON) * mz.abs(),
+                        "{name} scan {idx} peak {peak} profile={profile} mz {} != {mz}",
+                        arrays.mz[peak]
+                    );
+                    assert!((arrays.intensity[peak] - intensity).abs() <= f64::from(f32::EPSILON) * intensity.abs().max(1.0), "{name} scan {idx} peak {peak} profile={profile} intensity {} != {intensity}", arrays.intensity[peak]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires downloaded public fixtures, run by CI"]
+fn failures_retain_scan_offsets_categories_and_io_sources() {
+    use opentfraw::{ErrorKind, Operation};
+    use std::io::{self, Write};
+    let path = fixture("BSA-FT-HCD.raw");
+    let raw = RawFileReader::open_path(&path).unwrap();
+    let error =
+        opentfraw::try_extract_spectrum_arrays(&raw, &mut Cursor::new([]), 0, false).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Corrupt);
+    let context = error.context().unwrap();
+    assert_eq!(context.operation, Operation::DecodeSpectrum);
+    assert_eq!(context.scan_index, Some(0));
+    assert_eq!(context.scan_number, Some(1));
+    assert!(context.byte_offset.is_some_and(|offset| offset > 0));
+    assert!(matches!(
+        error.root_cause(),
+        opentfraw::Error::UnexpectedEof { .. } | opentfraw::Error::Io(_)
+    ));
+    let invalid = opentfraw::try_extract_spectrum_arrays(
+        &raw,
+        &mut File::open(&path).unwrap(),
+        u32::MAX,
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(invalid.kind(), ErrorKind::InvalidInput);
+    assert_eq!(invalid.context().unwrap().scan_index, Some(u32::MAX));
+    struct BrokenSink;
+    impl Write for BrokenSink {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let error = opentfraw::write_mzml(
+        &raw,
+        &mut File::open(path).unwrap(),
+        &mut BrokenSink,
+        "test.raw",
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Io);
+    assert_eq!(error.context().unwrap().operation, Operation::WriteMzml);
+    assert!(
+        matches!(error.root_cause(), opentfraw::Error::Io(source) if source.kind() == io::ErrorKind::BrokenPipe)
+    );
+}

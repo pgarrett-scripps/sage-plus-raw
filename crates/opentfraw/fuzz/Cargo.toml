@@ -32,3 +32,10 @@ path = "fuzz_targets/read_scan_peaks.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "strict_decode"
+path = "fuzz_targets/strict_decode.rs"
+test = false
+doc = false
+bench = false

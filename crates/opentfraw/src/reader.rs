@@ -142,6 +142,11 @@ pub struct ControllerInfo {
 impl RawFileReader {
     /// Open and parse a RAW file from a reader.
     pub fn open<R: Read + Seek>(source: R) -> Result<Self> {
+        Self::open_inner(source)
+            .map_err(|error| error.with_context(crate::ErrorContext::new(crate::Operation::Open)))
+    }
+
+    fn open_inner<R: Read + Seek>(source: R) -> Result<Self> {
         let mut r = BinaryReader::new(source);
 
         // 1. FileHeader
@@ -281,14 +286,10 @@ impl RawFileReader {
                                 (DEPENDENT_EVENT as usize).saturating_sub(preamble_size),
                             )
                         } else {
-                            return Err(Error::InvalidScanEvent(
-                                "unsupported variable event layout".into(),
-                            ));
+                            return Err(Error::UnsupportedLayout("variable event layout"));
                         }
                     } else {
-                        return Err(Error::InvalidScanEvent(
-                            "unsupported variable event layout".into(),
-                        ));
+                        return Err(Error::UnsupportedLayout("variable event layout"));
                     }
                 }
             } else {
@@ -569,9 +570,16 @@ impl RawFileReader {
 
     /// Open a RAW file from a path.
     pub fn open_path(path: impl AsRef<std::path::Path>) -> Result<Self> {
-        let file = std::fs::File::open(path)?;
-        let reader = std::io::BufReader::new(file);
-        Self::open(reader)
+        let path = path.as_ref();
+        let result = (|| {
+            let file = std::fs::File::open(path)?;
+            Self::open(std::io::BufReader::new(file))
+        })();
+        result.map_err(|error: Error| {
+            let mut context = crate::ErrorContext::new(crate::Operation::Open);
+            context.path = Some(path.to_path_buf());
+            error.with_context(context)
+        })
     }
 
     /// Enumerate all controllers in this RAW file.
@@ -628,14 +636,47 @@ impl RawFileReader {
     /// "index too large" situation. Both cases are simply out of range.
     fn scan_index_entry(&self, scan_number: u32) -> Result<&ScanIndexEntry> {
         let idx = scan_number_to_index(scan_number, self.run_header.sample_info.first_scan_number)
-            .ok_or(Error::AddressOutOfRange(scan_number as u64))?;
+            .ok_or(Error::InvalidScanNumber(scan_number))?;
         self.scan_index
             .get(idx)
-            .ok_or(Error::AddressOutOfRange(scan_number as u64))
+            .ok_or(Error::InvalidScanNumber(scan_number))
+    }
+
+    pub(crate) fn scan_context(
+        &self,
+        scan_number: u32,
+        operation: crate::Operation,
+    ) -> crate::ErrorContext {
+        let scan_index = scan_number.checked_sub(self.run_header.sample_info.first_scan_number);
+        let byte_offset = self.scan_index_entry(scan_number).ok().and_then(|entry| {
+            let offset = self.data_addr.checked_add(entry.offset)?;
+            if self.scan_format == crate::ScanDataFormat::FlatV63 {
+                offset.checked_sub(u64::from(entry.data_size))
+            } else {
+                Some(offset)
+            }
+        });
+        crate::ErrorContext {
+            operation,
+            path: None,
+            scan_index,
+            scan_number: Some(scan_number),
+            byte_offset,
+        }
     }
 
     /// Read a single scan data packet (PacketHeader format).
     pub fn read_scan<R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+    ) -> Result<ScanDataPacket> {
+        self.read_scan_inner(source, scan_number).map_err(|error| {
+            error.with_context(self.scan_context(scan_number, crate::Operation::ReadScan))
+        })
+    }
+
+    fn read_scan_inner<R: Read + Seek>(
         &self,
         source: &mut R,
         scan_number: u32,
@@ -656,6 +697,17 @@ impl RawFileReader {
     /// Only valid for PacketHeader-format files; TSQ/SRM scans carry no FT
     /// label data.
     pub fn read_scan_labels<R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+    ) -> Result<ScanDataPacket> {
+        self.read_scan_labels_inner(source, scan_number)
+            .map_err(|error| {
+                error.with_context(self.scan_context(scan_number, crate::Operation::ReadScan))
+            })
+    }
+
+    fn read_scan_labels_inner<R: Read + Seek>(
         &self,
         source: &mut R,
         scan_number: u32,
@@ -685,6 +737,17 @@ impl RawFileReader {
         source: &mut R,
         scan_number: u32,
     ) -> Result<Vec<Peak>> {
+        self.read_scan_flat_inner(source, scan_number)
+            .map_err(|error| {
+                error.with_context(self.scan_context(scan_number, crate::Operation::ReadScan))
+            })
+    }
+
+    fn read_scan_flat_inner<R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+    ) -> Result<Vec<Peak>> {
         let entry = self.scan_index_entry(scan_number)?;
         read_flat_peaks(source, self.data_addr, entry.offset, entry.data_size)
     }
@@ -699,6 +762,17 @@ impl RawFileReader {
         source: &mut R,
         scan_number: u32,
     ) -> Result<Vec<Peak>> {
+        self.read_scan_srm_v66_inner(source, scan_number)
+            .map_err(|error| {
+                error.with_context(self.scan_context(scan_number, crate::Operation::ReadScan))
+            })
+    }
+
+    fn read_scan_srm_v66_inner<R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+    ) -> Result<Vec<Peak>> {
         let entry = self.scan_index_entry(scan_number)?;
         read_scan_srm_v66(source, self.data_addr, entry.offset, entry.data_size)
     }
@@ -706,10 +780,11 @@ impl RawFileReader {
     /// Read a single scan's peaks using whichever decoder matches this file's
     /// scan-data format.
     ///
-    /// This is the recommended high-level entry point. It dispatches on
+    /// This low-level entry point dispatches on
     /// [`Self::scan_format`] so callers do not have to know whether a file is
     /// a TSQ SRM run (flat peaks) or an Orbitrap/ion-trap acquisition
-    /// (PacketHeader records).
+    /// (PacketHeader records). Prefer [`crate::try_extract_spectrum_arrays`]
+    /// for validated scientific arrays and contextual metadata.
     ///
     /// The returned `Vec<Peak>` contains centroided peaks regardless of the
     /// underlying format. For PacketHeader files that also contain a profile
@@ -739,6 +814,17 @@ impl RawFileReader {
     ///
     /// For TSQ/SRM files this is identical to [`Self::read_scan_peaks`].
     pub fn read_peaks_only<R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+    ) -> Result<Vec<Peak>> {
+        self.read_peaks_only_inner(source, scan_number)
+            .map_err(|error| {
+                error.with_context(self.scan_context(scan_number, crate::Operation::ReadScan))
+            })
+    }
+
+    fn read_peaks_only_inner<R: Read + Seek>(
         &self,
         source: &mut R,
         scan_number: u32,

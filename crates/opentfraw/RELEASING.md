@@ -1,6 +1,6 @@
 # Public launch preparation
 
-The candidate package is `opentfraw-reader 0.1.0-rc.1`. The Rust library name remains `opentfraw`. Existing private tags and artifacts retain their original package identity and version.
+The candidate package is `opentfraw-reader 0.1.0-rc.2`. The Rust library name remains `opentfraw`. Existing private tags and artifacts retain their original package identity and version.
 
 Nothing in these instructions authorizes publication or a visibility change. Real manifests retain `publish = false`, and Python retains its private classifier. There is no automatic publishing or website deployment workflow.
 
@@ -29,3 +29,5 @@ Before any public launch, review the exact committed candidate and its CI result
 The account owner must then explicitly authorize public repository visibility and registry publication. Only after that authorization should maintainers remove the native publishing guard in a reviewed commit, configure registry ownership and a scoped authentication mechanism, publish the approved version, and verify its registry metadata and generated documentation. Website deployment and Python publication are separate decisions requiring their own review and authorization.
 
 Do not use the upstream `opentfraw` crates.io or PyPI identities or assume access to upstream publisher credentials. Do not modify existing private release tags. A future public publishing workflow should use least-privilege permissions and an explicit approval environment.
+
+Before rc.2 verification, run `python scripts/fetch_public_fixtures.py` and `python scripts/prepare_reference_arrays.py`. The ignored public integration tests require those normalized reference arrays. Require all reader checks, including bounded fuzzing and Python runtime tests, before a launch decision. Benchmark JSON is local evidence, not a portable performance guarantee.

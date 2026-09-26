@@ -159,7 +159,7 @@ def test_peaks_out_of_range_raises(raw_file):
 def test_profile(raw_file):
     try:
         mz, intensity = raw_file.profile(raw_file.first_scan)
-    except ValueError as e:
+    except NotImplementedError as e:
         pytest.skip(f"profile() unsupported for this file's scan format: {e}")
         return
     assert isinstance(mz, np.ndarray)
@@ -268,17 +268,18 @@ def test_precursor_mz_consistent_with_filter(raw_file):
         pytest.skip("fixture file has no MS2 scans with a filter precursor")
 
 
-def test_scan_mode_consistent_with_filter(raw_file):
-    """``scan_mode`` matches the scan-data token (``c`` / ``p``) of the
-    filter string, which is rendered from the same scan event."""
+def test_recorded_scan_mode_consistent_with_filter(raw_file):
+    """Metadata-only modes describe acquisition, while scan arrays are centroid."""
     token = {"centroid": "c", "profile": "p"}
+    table = raw_file.scan_table()
     checked = 0
-    for scan in raw_file.iter_scans():
-        if scan["scan_mode"] is None or not scan["filter_string"]:
+    for mode, scan_filter in zip(table["scan_mode"], table["filter_string"]):
+        if mode is None or not scan_filter:
             continue
-        assert scan["filter_string"].split()[2] == token[scan["scan_mode"]]
+        assert scan_filter.split()[2] == token[mode]
         checked += 1
     assert checked > 0
+    assert all(scan["scan_mode"] == "centroid" for scan in raw_file.iter_scans())
 
 
 def test_ms1_scans_have_no_precursor(raw_file):
@@ -415,7 +416,8 @@ def test_scan_table_matches_iter_scans(raw_file):
     assert set(table) == set(scans[0]) - {"mz", "intensity"}
     for key, column in table.items():
         assert len(column) == len(scans)
-        assert column == [scan[key] for scan in scans], key
+        if key != "scan_mode":
+            assert column == [scan[key] for scan in scans], key
 
 
 def test_controllers(raw_file):

@@ -14,7 +14,7 @@
 //! ```
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -25,14 +25,23 @@ use ::opentfraw::scan_filter::activation_str;
 use ::opentfraw::ExtraFields;
 use ::opentfraw::{scan_metadata, Polarity, RawFileReader, ScanMetadata, ScanMode};
 use numpy::{PyArray1, ToPyArray};
-use pyo3::exceptions::{PyIOError, PyIndexError, PyValueError};
+use pyo3::exceptions::{
+    PyIOError, PyIndexError, PyMemoryError, PyNotImplementedError, PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pyo3::IntoPyObjectExt;
 
 /// Translate an `opentfraw::Error` into a Python exception.
 fn to_py_err(e: ::opentfraw::Error) -> PyErr {
-    PyIOError::new_err(format!("{e}"))
+    use ::opentfraw::ErrorKind;
+    match e.kind() {
+        ErrorKind::InvalidInput => PyIndexError::new_err(e.to_string()),
+        ErrorKind::Unsupported => PyNotImplementedError::new_err(e.to_string()),
+        ErrorKind::Corrupt => PyValueError::new_err(e.to_string()),
+        ErrorKind::ResourceLimit => PyMemoryError::new_err(e.to_string()),
+        _ => PyIOError::new_err(e.to_string()),
+    }
 }
 
 /// Convert a generic (trailer) value to a Python object, preserving its type.
@@ -373,13 +382,14 @@ impl RawFile {
         py: Python<'py>,
         scan_number: u32,
     ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f32>>)> {
+        let idx = scan_number
+            .checked_sub(self.first_scan())
+            .ok_or_else(|| PyIndexError::new_err("scan before first scan"))?;
         let mut src = self.locked_source()?;
-        let peaks = self
-            .reader
-            .read_peaks_only(&mut *src, scan_number)
+        let record = ::opentfraw::try_extract_spectrum(&self.reader, &mut *src, idx, false)
             .map_err(to_py_err)?;
-        let mz: Vec<f64> = peaks.iter().map(|p| p.mz as f64).collect();
-        let intensity: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
+        let mz = record.mz;
+        let intensity = record.intensity;
         Ok((mz.to_pyarray(py), intensity.to_pyarray(py)))
     }
 
@@ -397,34 +407,20 @@ impl RawFile {
     ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
         use ::opentfraw::scan_format::ScanDataFormat;
         if self.reader.scan_format != ScanDataFormat::PacketHeader {
-            return Err(PyValueError::new_err(
-                "profile() is only available for PacketHeader files (Orbitrap/ion-trap); \
-                 this file uses a flat-peak SRM format",
+            return Err(PyNotImplementedError::new_err(
+                "profile() requires a PacketHeader file (Orbitrap or ion trap). This file uses a flat SRM format",
             ));
         }
-        let first = self.first_scan();
-        let idx = scan_number.checked_sub(first).ok_or_else(|| {
-            PyIndexError::new_err(format!("scan {scan_number} < first scan {first}"))
-        })? as usize;
-
-        // Frequency->m/z coefficients live on the scan event (empty for ITMS /
-        // already-m/z-domain scans, in which case to_mz_intensity passes through).
-        let coefficients: Vec<f64> = self
-            .reader
-            .scan_events
-            .get(idx)
-            .map(|e| e.coefficients.clone())
-            .unwrap_or_default();
-
+        let idx = scan_number
+            .checked_sub(self.first_scan())
+            .ok_or_else(|| PyIndexError::new_err("scan before first scan"))?;
         let mut src = self.locked_source()?;
-        let packet = self
-            .reader
-            .read_scan(&mut *src, scan_number)
+        let arrays = ::opentfraw::try_extract_spectrum_arrays(&self.reader, &mut *src, idx, true)
             .map_err(to_py_err)?;
-
-        let (mz, intensity): (Vec<f64>, Vec<f64>) = match packet.profile {
-            Some(profile) => profile.to_mz_intensity(&coefficients).into_iter().unzip(),
-            None => (Vec::new(), Vec::new()),
+        let (mz, intensity) = if arrays.scan_mode == Some(ScanMode::Profile) {
+            (arrays.mz, arrays.intensity)
+        } else {
+            (Vec::new(), Vec::new())
         };
         Ok((mz.to_pyarray(py), intensity.to_pyarray(py)))
     }
@@ -555,10 +551,11 @@ impl RawFile {
         let idx = scan_number.checked_sub(first).ok_or_else(|| {
             PyIndexError::new_err(format!("scan {scan_number} < first scan {first}"))
         })?;
-        let meta = scan_metadata(&self.reader, idx)
+        let mut meta = scan_metadata(&self.reader, idx)
             .ok_or_else(|| PyIndexError::new_err(format!("scan {scan_number} out of range")))?;
 
         let (mz, intensity) = self.peaks(py, scan_number)?;
+        meta.scan_mode = Some(ScanMode::Centroid);
         let d = metadata_dict(py, &self.reader, &meta)?;
         d.set_item("mz", mz)?;
         d.set_item("intensity", intensity)?;
@@ -572,6 +569,8 @@ impl RawFile {
     /// to a list with one entry per scan, in scan order, so
     /// ``pandas.DataFrame(raw.scan_table())`` gives one row per scan. It is
     /// much faster than :meth:`iter_scans` when only metadata is needed.
+    /// The `scan_mode` column describes the recorded acquisition mode.
+    /// In :meth:`scan`, that field describes the returned centroid arrays.
     fn scan_table<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let columns = PyDict::new(py);
         for idx in 0..self.reader.num_scans {
@@ -692,9 +691,9 @@ impl RawFile {
             .ok_or_else(|| PyValueError::new_err("non-UTF8 file name"))?;
         let mut source = OpenTfRawSource::new(&self.reader, &mut *src, raw_filename, false)
             .with_extra_fields(selection);
-        source
-            .write_mzml(&mut out)
-            .map_err(|e| PyIOError::new_err(e.to_string()))?;
+        source.write_mzml(&mut out).map_err(to_py_err)?;
+        out.flush()
+            .map_err(|error| PyIOError::new_err(error.to_string()))?;
         Ok(())
     }
 }

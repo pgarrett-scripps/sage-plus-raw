@@ -55,12 +55,14 @@ pub mod scan_index;
 pub mod seq_row;
 
 pub use device::{DetectedInstrument, DeviceFamily};
-pub use error::{Error, Result};
+pub use error::{Error, ErrorContext, ErrorKind, Operation, Result};
 pub use extra::ExtraFields;
 pub use metadata::{ScanParams, StatusLogEntry};
+#[allow(deprecated)]
 pub use mzml::{
-    extract_spectrum, iter_spectra, scan_metadata, try_extract_spectrum, try_iter_spectra,
-    write_indexed_mzml, write_mzml, PrecursorInfo, ScanMetadata, SpectrumRecord,
+    extract_spectrum, iter_spectra, scan_metadata, try_extract_spectrum,
+    try_extract_spectrum_arrays, try_iter_spectra, write_indexed_mzml, write_mzml, PrecursorInfo,
+    ScanMetadata, SpectrumArrays, SpectrumRecord,
 };
 pub use reader::{ControllerInfo, ControllerType, RawFileReader};
 pub use scan_format::ScanDataFormat;

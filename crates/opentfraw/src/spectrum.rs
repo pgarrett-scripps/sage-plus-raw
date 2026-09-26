@@ -306,6 +306,10 @@ pub fn try_extract_spectrum<R: Read + Seek>(
 
 /// Compatibility extraction that discards decode errors.
 /// Use [`try_extract_spectrum`] for conversion or scientific processing.
+#[deprecated(
+    since = "0.1.0-rc.2",
+    note = "Use try_extract_spectrum to retain decoding failures"
+)]
 pub fn extract_spectrum<R: Read + Seek>(
     raw: &RawFileReader,
     source: &mut R,
@@ -333,40 +337,110 @@ pub(crate) struct DecodedSpectrum {
     pub(crate) scan_mode: Option<crate::ScanMode>,
 }
 
+/// Strict arrays with full profile precision, before narrowing to f32 for
+/// [`SpectrumRecord`]. Centroid intensities are widened losslessly from f32.
+#[derive(Debug, Clone)]
+pub struct SpectrumArrays {
+    pub metadata: ScanMetadata,
+    pub mz: Vec<f64>,
+    pub intensity: Vec<f64>,
+    pub scan_mode: Option<crate::ScanMode>,
+}
+
+/// Decode validated arrays without narrowing profile intensities. Metadata's
+/// recorded scan mode remains available alongside the effective `scan_mode`.
+pub fn try_extract_spectrum_arrays<R: Read + Seek>(
+    raw: &RawFileReader,
+    source: &mut R,
+    idx: u32,
+    include_profile: bool,
+) -> Result<SpectrumArrays> {
+    let result = decode_arrays(raw, source, idx, include_profile);
+    result.map_err(|error| error.with_context(decode_context(raw, idx)))
+}
+
+fn decode_context(raw: &RawFileReader, idx: u32) -> crate::ErrorContext {
+    let number = raw
+        .run_header
+        .sample_info
+        .first_scan_number
+        .checked_add(idx);
+    let mut context = number
+        .map(|number| raw.scan_context(number, crate::Operation::DecodeSpectrum))
+        .unwrap_or_else(|| crate::ErrorContext::new(crate::Operation::DecodeSpectrum));
+    context.scan_index = Some(idx);
+    context
+}
+
 pub(crate) fn decode_spectrum<R: Read + Seek>(
     raw: &RawFileReader,
     source: &mut R,
     idx: u32,
     include_profile: bool,
 ) -> Result<DecodedSpectrum> {
-    let meta = scan_metadata(raw, idx).ok_or(crate::Error::InvalidScanIndex(idx))?;
-    if !raw.flat_peaks
-        && raw
+    let arrays = try_extract_spectrum_arrays(raw, source, idx, include_profile)?;
+    let intensity: Vec<f32> = arrays
+        .intensity
+        .into_iter()
+        .map(|value| value as f32)
+        .collect();
+    if intensity.iter().any(|value| !value.is_finite()) {
+        return Err(
+            crate::Error::CorruptData("intensity cannot be represented as finite f32")
+                .with_context(decode_context(raw, idx)),
+        );
+    }
+    Ok(DecodedSpectrum {
+        metadata: arrays.metadata,
+        mz: arrays.mz,
+        intensity,
+        scan_mode: arrays.scan_mode,
+    })
+}
+
+pub(crate) fn validate_scan_event(raw: &RawFileReader, idx: u32) -> Result<()> {
+    if !raw.flat_peaks {
+        let event = raw
             .scan_events
             .get(idx as usize)
-            .and_then(|event| event.preamble.ms_power())
-            .is_none_or(|power| power == MsPower::Undefined)
-    {
-        return Err(crate::Error::UnsupportedOperation(
-            "missing or unknown scan event MS level",
-        ));
+            .ok_or(crate::Error::CorruptData("missing scan event"))?;
+        match event.preamble.ms_power() {
+            None => {
+                return Err(crate::Error::UnsupportedLayout(
+                    "unknown scan event MS level",
+                ))
+            }
+            Some(MsPower::Undefined) => {
+                return Err(crate::Error::CorruptData("undefined scan event MS level"))
+            }
+            _ => {}
+        }
     }
+    Ok(())
+}
+
+fn decode_arrays<R: Read + Seek>(
+    raw: &RawFileReader,
+    source: &mut R,
+    idx: u32,
+    include_profile: bool,
+) -> Result<SpectrumArrays> {
+    let meta = scan_metadata(raw, idx).ok_or(crate::Error::InvalidScanIndex(idx))?;
+    validate_scan_event(raw, idx)?;
     let event = raw.scan_events.get(idx as usize);
-    let (mz, intensity, effective_scan_mode) =
+    let (mz, intensity, scan_mode) =
         resolve_scan_arrays(raw, source, meta.scan_number, include_profile, event)?;
     if mz.len() != intensity.len()
         || mz.iter().any(|value| !value.is_finite() || *value <= 0.0)
         || intensity.iter().any(|value| !value.is_finite())
     {
-        return Err(crate::Error::UnsupportedOperation(
-            "invalid decoded peak arrays",
-        ));
+        return Err(crate::Error::CorruptData("invalid decoded peak arrays"));
     }
-    Ok(DecodedSpectrum {
+    Ok(SpectrumArrays {
         metadata: meta,
         mz,
         intensity,
-        scan_mode: effective_scan_mode,
+        scan_mode,
     })
 }
 
@@ -375,6 +449,10 @@ pub(crate) fn decode_spectrum<R: Read + Seek>(
 /// Skipped scans (those for which the peak arrays cannot be decoded) are
 /// dropped silently. Use [`try_iter_spectra`] for strict processing. The iterator borrows
 /// both `raw` and `source` for its lifetime.
+#[deprecated(
+    since = "0.1.0-rc.2",
+    note = "Use try_iter_spectra to retain decoding failures"
+)]
 pub fn iter_spectra<'a, R: Read + Seek>(
     raw: &'a RawFileReader,
     source: &'a mut R,
@@ -386,7 +464,7 @@ pub fn iter_spectra<'a, R: Read + Seek>(
         while idx < n {
             let cur = idx;
             idx += 1;
-            if let Some(rec) = extract_spectrum(raw, source, cur, include_profile) {
+            if let Ok(rec) = try_extract_spectrum(raw, source, cur, include_profile) {
                 return Some(rec);
             }
         }
@@ -412,7 +490,10 @@ fn ms_level(power: MsPower) -> u32 {
 fn validate_profile_calibration(coeffs: &[f64], analyzer: Option<crate::Analyzer>) -> Result<()> {
     let valid_shape = matches!(coeffs.len(), 4 | 5 | 7)
         || (coeffs.is_empty() && analyzer == Some(crate::Analyzer::ITMS));
-    if !valid_shape || coeffs.iter().any(|value| !value.is_finite()) {
+    if coeffs.iter().any(|value| !value.is_finite()) {
+        return Err(crate::Error::CorruptData("nonfinite profile calibration"));
+    }
+    if !valid_shape {
         return Err(crate::Error::UnsupportedOperation(
             "missing or unsupported profile calibration",
         ));
@@ -434,7 +515,7 @@ fn resolve_scan_arrays<R: Read + Seek>(
     scan_number: u32,
     include_profile: bool,
     event: Option<&ScanEvent>,
-) -> Result<(Vec<f64>, Vec<f32>, Option<crate::ScanMode>)> {
+) -> Result<(Vec<f64>, Vec<f64>, Option<crate::ScanMode>)> {
     if include_profile && !raw.flat_peaks {
         let packet = raw.read_scan(source, scan_number)?;
         if let Some(profile) = packet.profile {
@@ -445,23 +526,22 @@ fn resolve_scan_arrays<R: Read + Seek>(
                 .iter()
                 .any(|(mz, intensity)| !mz.is_finite() || *mz <= 0.0 || !intensity.is_finite())
             {
-                return Err(crate::Error::UnsupportedOperation(
-                    "invalid decoded profile arrays",
-                ));
+                return Err(crate::Error::CorruptData("invalid decoded profile arrays"));
             }
-            let (mz, int) = pairs
-                .into_iter()
-                .map(|(mz, intensity)| (mz, intensity as f32))
-                .unzip();
+            let (mz, int) = pairs.into_iter().unzip();
             return Ok((mz, int, Some(crate::ScanMode::Profile)));
         }
         let mz: Vec<f64> = packet.peaks.iter().map(|p| p.mz).collect();
-        let int: Vec<f32> = packet.peaks.iter().map(|p| p.abundance).collect();
+        let int: Vec<f64> = packet
+            .peaks
+            .iter()
+            .map(|p| f64::from(p.abundance))
+            .collect();
         return Ok((mz, int, Some(crate::ScanMode::Centroid)));
     }
     let peaks = raw.read_peaks_only(source, scan_number)?;
     let mz: Vec<f64> = peaks.iter().map(|p| p.mz).collect();
-    let int: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
+    let int: Vec<f64> = peaks.iter().map(|p| f64::from(p.abundance)).collect();
     Ok((mz, int, Some(crate::ScanMode::Centroid)))
 }
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2] - Unpublished candidate
+
+- Deprecated lossy helpers and added strict full-precision arrays for native consumers.
+- Added typed failure categories with operation, scan and packet-offset context while retaining source errors.
+- Applied strict decoding to Python arrays and propagated output flush failures.
+- Qualified stored spectra against independent centroid and profile references.
+- Added bounded seeded fuzz CI, Python runtime checks and a deterministic JSON benchmark executable.
+
 ## [0.1.0-rc.1] - Unpublished launch candidate
 
 - Prepared a distinct `opentfraw-reader` registry identity while retaining the `opentfraw` Rust library name and import alias.
