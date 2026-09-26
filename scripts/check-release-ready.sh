@@ -14,7 +14,7 @@ echo "Checking release readiness for $ref ($sha)..."
 check_workflow() {
     local workflow="$1"
     local run_json
-    run_json="$(gh run list -w "$workflow" -c "$sha" --json status,conclusion,url -L 1)"
+    run_json="$(gh run list --repo pgarrett-scripps/opentfraw -w "$workflow" -c "$sha" --json status,conclusion,url -L 1)"
 
     if [[ "$run_json" == "[]" ]]; then
         echo "FAIL: no run of $workflow found for commit $sha."
