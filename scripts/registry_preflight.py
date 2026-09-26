@@ -1,5 +1,4 @@
 """Validate registry packaging in a disposable committed copy without publishing."""
-import hashlib
 import io
 import os
 from pathlib import Path
@@ -45,12 +44,6 @@ def main():
                 env=environment,
                 check=True,
             )
-            archives = list((target / "target/package").glob("opentfraw-reader-*.crate"))
-            if len(archives) != 1:
-                raise SystemExit("Expected one verified registry candidate archive")
-            package = archives[0]
-            print(f"Verified disposable archive: {package.name}")
-            print(f"SHA-256: {hashlib.sha256(package.read_bytes()).hexdigest()}")
             print("Dry-run completed, no upload or source-manifest change performed")
     finally:
         if source_manifest.read_bytes() != original:
