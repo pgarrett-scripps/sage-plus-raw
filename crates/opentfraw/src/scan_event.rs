@@ -78,10 +78,8 @@ impl ScanEventPreamble {
         self.bytes.get(10).copied() == Some(1)
     }
 
-    /// True if this scan is a Data-Independent Acquisition (DIA) MS2+ scan:
-    /// ms_power >= 2 and the dependent flag is NOT set.  In DIA mode the
-    /// instrument selects a wide isolation window and fragments all ions in
-    /// that window together, without targeting a specific precursor.
+    /// Legacy nondependent-MS2 heuristic, not a DIA classification.
+    /// Targeted and other acquisitions can also set this combination.
     pub fn is_dia(&self) -> bool {
         let ms_power = self.bytes.get(6).copied().unwrap_or(0);
         ms_power >= 2 && !self.is_dependent()
@@ -94,11 +92,11 @@ impl ScanEventPreamble {
             .and_then(|&b| crate::Ionization::from_byte(b))
     }
 
-    /// Activation method: byte 24.
+    /// Qualified activation method, currently unavailable.
+    /// The legacy byte-24 lookup disagrees with independent ETD references.
+    /// Use [`Self::activation_byte`] to retain the raw value for diagnostics.
     pub fn activation(&self) -> Option<crate::Activation> {
-        self.bytes
-            .get(24)
-            .and_then(|&b| crate::Activation::from_byte(b))
+        None
     }
 
     /// Wideband (broadband isolation) flag: byte 32.
@@ -121,6 +119,32 @@ impl ScanEventPreamble {
 }
 
 impl ScanEvent {
+    /// Activation supported by independent v66 HCD and ETD references.
+    /// The byte-24 preamble value is identical for both methods. The reaction
+    /// tag distinguishes them in the qualified v66 layouts. Other tags and
+    /// mixed reactions remain unknown. Raw reaction words are preserved.
+    pub fn qualified_activation(&self, version: u32) -> Option<crate::Activation> {
+        if version != 66
+            || self.preamble.bytes.len() != 136
+            || self.preamble.ms_power() != Some(crate::MsPower::Ms2)
+        {
+            return None;
+        }
+        let first = self.reactions.first()?;
+        if first.unknown_long2 != 0
+            || self.reactions.iter().any(|reaction| {
+                reaction.unknown_long1 != first.unknown_long1 || reaction.unknown_long2 != 0
+            })
+        {
+            return None;
+        }
+        match first.unknown_long1 {
+            9 => Some(crate::Activation::ETD),
+            11 => Some(crate::Activation::HCD),
+            _ => None,
+        }
+    }
+
     /// Read one scan event.
     ///
     /// For v66 files, `body_primary` is the body size for primary (MS1) scans

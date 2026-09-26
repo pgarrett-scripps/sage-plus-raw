@@ -1019,11 +1019,12 @@ impl RawFileReader {
         self.inst_log_record(scan_number).map(StatusLogEntry)
     }
 
-    /// Return the canonical Thermo scan filter string for a given scan
+    /// Return a reconstructed Thermo scan filter subset for a given scan
     /// (1-based scan number), or `None` if the scan is out of range.
     ///
     /// Example output: `"FTMS + p NSI Full ms [350.0000-1500.0000]"`.
     ///
+    /// Activation clauses are included only for qualified v66 reaction tags.
     /// See [`crate::scan_filter`] for grammar details.
     pub fn scan_filter(&self, scan_number: u32) -> Option<String> {
         let first = self.run_header.sample_info.first_scan_number;
@@ -1042,16 +1043,7 @@ impl RawFileReader {
                 ScanDataFormat::FlatV63 => "NSI",
                 _ => "ESI",
             };
-            let ce_part = if self.scan_format == ScanDataFormat::FlatV63 {
-                self.srm_ce_by_event
-                    .get(&entry.scan_event)
-                    .map(|&ce| format!("@cid{:.2}", ce))
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-            // Format: "+ c {ION} SRM ms2 {Q1:.3}{@cidCE} [{lo1:.3}-{hi1:.3}, ...]"
-            let mut s = format!("+ c {} SRM ms2 {:.3}{}", ionization, q1, ce_part);
+            let mut s = format!("c {} SRM ms2 {:.3}", ionization, q1);
             if !windows.is_empty() {
                 s.push(' ');
                 s.push('[');
@@ -1075,12 +1067,13 @@ impl RawFileReader {
         let supplemental = params
             .as_ref()
             .and_then(|p| p.supplemental_activation_energy());
-        Some(crate::scan_filter::build_filter(
+        Some(crate::scan_filter::build_filter_with_activation(
             event,
             entry,
             precursor,
             energy,
             supplemental,
+            event.qualified_activation(self.version),
         ))
     }
 

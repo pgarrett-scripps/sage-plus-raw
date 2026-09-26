@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1-private.1] - 2026-09-26
+
+- Qualified mixed v66 event records and preserved all four MSX reactions.
+- Corrected isolation target selection and v66 HCD/ETD reaction-tag activation.
+- Added strict spectrum extraction and iteration, source error propagation in mzML writers and an adapter error-checking method.
+- Rejected lossy MSX, SPS, MS3 and unknown-activation mzML exports.
+- Corrected emitted centroid mode, profile calibration validation and invalid peak array handling.
+- Corrected instrument and SRM chromatogram PSI-MS terms.
+- Removed invented SRM polarity, isolation width, reaction energy units and dangling precursor references.
+- Added pinned, hash-verified public acquisition regressions to Linux, macOS and Windows CI, plus minimum Rust version and package verification.
+- Retained legacy lossy extraction APIs for source compatibility and documented their limits.
+
 ## [1.6.0] - 2026-09-24
 
 ### Added

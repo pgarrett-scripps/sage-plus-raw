@@ -1,4 +1,4 @@
-/// Scan filter string builder - reproduces Thermo's canonical scan filter
+/// Scan filter string builder - reconstructs a subset of Thermo scan filter
 /// syntax for interoperability with downstream tools.
 ///
 /// A Thermo scan filter is a single-line textual summary of a scan's
@@ -14,13 +14,17 @@
 ///   ms<n>  [<precursor>@<method><energy> ...]  [<range>]
 /// ```
 ///
-/// ## Examples (verified against Thermo output)
+/// The standalone builder omits activation. RawFileReader supplies qualified
+/// activation when available.
+/// These reconstructed filters are not original vendor filter strings.
+///
+/// ## Examples
 ///
 /// - `FTMS + p NSI Full ms [350.0000-1500.0000]`
-/// - `FTMS + c NSI d Full ms2 645.8311@hcd28.00 [150.0000-2000.0000]`
-/// - `ITMS + c NSI d Full ms2 520.2400@cid35.00 [135.0000-1060.0000]`
-/// - `FTMS + c NSI d Full ms2 649.1234@etd35.00@hcd28.00 [150.0000-2000.0000]` (EThcD)
-/// - `ITMS + c NSI d Full ms3 810.50@cid35.00 265.27@cid35.00 [100.0000-1000.0000]` (MS3)
+/// - `FTMS + c NSI d Full ms2 645.8311 [150.0000-2000.0000]`
+/// - `ITMS + c NSI d Full ms2 520.2400 [135.0000-1060.0000]`
+/// - `FTMS + c NSI d Full ms2 649.1234 [150.0000-2000.0000]` (EThcD)
+/// - `ITMS + c NSI d Full ms3 810.50 265.27 [100.0000-1000.0000]` (MS3)
 use crate::scan_event::ScanEvent;
 use crate::scan_index::ScanIndexEntry;
 use crate::types::{Activation, Analyzer, MsPower, ScanType};
@@ -56,6 +60,24 @@ pub fn build_filter(
     precursor_mz: Option<f64>,
     activation_energy: Option<f64>,
     supplemental_energy: Option<f64>,
+) -> String {
+    build_filter_with_activation(
+        event,
+        index_entry,
+        precursor_mz,
+        activation_energy,
+        supplemental_energy,
+        None,
+    )
+}
+
+pub(crate) fn build_filter_with_activation(
+    event: &ScanEvent,
+    index_entry: &ScanIndexEntry,
+    precursor_mz: Option<f64>,
+    activation_energy: Option<f64>,
+    _supplemental_energy: Option<f64>,
+    activation: Option<Activation>,
 ) -> String {
     let mut out = String::with_capacity(96);
     let p = &event.preamble;
@@ -124,111 +146,30 @@ pub fn build_filter(
         out.push_str(&format!("ms{n}"));
     }
 
-    // Precursor chain (only for MSn scans)
+    // Preserve reaction targets without inferring energy units or method chains.
     if n >= 2 {
-        let act = p.activation();
-        let reactions = &event.reactions;
-
-        // Detect EThcD from tribrid instruments (Eclipse, Fusion Lumos).
-        // These encode EThcD as CID/HCD activation (byte 24 = 4 or 1) with
-        // n_reactions = 2 in the body, where only the first reaction has a
-        // valid non-zero precursor m/z.  The preamble activation byte is
-        // never EThcD (12) for these instruments.
-        let n_valid_precursors = reactions.iter().filter(|r| r.precursor_mz > 0.0).count();
-        let is_tribrid_ethcd = n == 2
-            && reactions.len() >= 2
-            && n_valid_precursors == 1
-            && matches!(analyzer, Some(Analyzer::FTMS))
-            && matches!(act, Some(Activation::CID) | Some(Activation::HCD));
-
-        if is_tribrid_ethcd {
-            // Eclipse / Fusion Lumos EThcD: one valid precursor, two-clause filter.
-            // activation_energy from scan_params "HCD Energy:" = supplemental HCD NCE%.
-            if let Some(rx) = reactions.iter().find(|r| r.precursor_mz > 0.0) {
-                out.push(' ');
-                out.push_str(&format!("{:.4}", rx.precursor_mz));
-                out.push('@');
-                out.push_str("etd");
-                out.push('@');
-                out.push_str("hcd");
-                if let Some(e) = activation_energy {
-                    out.push_str(&format!("{e:.2}"));
-                }
+        let masses: Vec<f64> = if event.reactions.is_empty() {
+            precursor_mz.into_iter().collect()
+        } else {
+            event
+                .reactions
+                .iter()
+                .map(|reaction| reaction.precursor_mz)
+                .collect()
+        };
+        for mz in masses {
+            if !mz.is_finite() || mz <= 0.0 {
+                continue;
             }
-        } else if !reactions.is_empty() {
-            // Full precursor chain from parsed reactions.
-            // For MS3: reactions[0] = parent MS2 precursor, reactions[1] = MS3 precursor.
-            // Each intermediate reaction uses its stored energy; the final reaction uses
-            // activation_energy from scan_params when available (more accurate label).
-            let last = reactions.len() - 1;
-            for (i, rx) in reactions.iter().enumerate() {
-                let mz = rx.precursor_mz;
-                if mz <= 0.0 {
-                    continue;
-                }
-                out.push(' ');
-                out.push_str(&format!("{mz:.4}"));
-                if let Some(a) = act {
-                    out.push('@');
-                    let is_last = i == last;
-                    let is_ethcd = a == Activation::EThcD;
-
-                    // EThcD: final precursor gets two clauses (@etd<e>@hcd<se>).
-                    if is_last && is_ethcd {
-                        out.push_str("etd");
-                        if let Some(e) = activation_energy {
-                            out.push_str(&format!("{e:.2}"));
-                        }
-                        out.push('@');
-                        out.push_str("hcd");
-                        if let Some(se) = supplemental_energy {
-                            out.push_str(&format!("{se:.2}"));
-                        }
-                    } else {
-                        let astr = activation_str(analyzer, a);
-                        out.push_str(astr);
-                        let energy = if is_last {
-                            activation_energy.or({
-                                if rx.energy > 0.0 {
-                                    Some(rx.energy)
-                                } else {
-                                    None
-                                }
-                            })
-                        } else {
-                            if rx.energy > 0.0 {
-                                Some(rx.energy)
-                            } else {
-                                activation_energy
-                            }
-                        };
-                        if let Some(e) = energy {
-                            out.push_str(&format!("{e:.2}"));
-                        }
-                    }
-                }
-            }
-        } else if let Some(mz) = precursor_mz {
-            // Fallback: single precursor from scan_params.
             out.push(' ');
             out.push_str(&format!("{mz:.4}"));
-            if let Some(a) = act {
+            if let Some(method) = activation {
                 out.push('@');
-                if a == Activation::EThcD {
-                    out.push_str("etd");
-                    if let Some(e) = activation_energy {
-                        out.push_str(&format!("{e:.2}"));
-                    }
-                    out.push('@');
-                    out.push_str("hcd");
-                    if let Some(se) = supplemental_energy {
-                        out.push_str(&format!("{se:.2}"));
-                    }
-                } else {
-                    out.push_str(activation_str(analyzer, a));
-                    if let Some(e) = activation_energy {
-                        out.push_str(&format!("{e:.2}"));
-                    }
+                out.push_str(method.as_str());
+                if let Some(energy) =
+                    activation_energy.filter(|value| value.is_finite() && *value > 0.0)
+                {
+                    out.push_str(&format!("{energy:.2}"));
                 }
             }
         }
@@ -325,10 +266,7 @@ mod tests {
         };
         let idx = make_index(150.0, 2000.0);
         let s = build_filter(&ev, &idx, Some(645.8311), Some(28.0), None);
-        assert_eq!(
-            s,
-            "FTMS + c NSI d Full ms2 645.8311@hcd28.00 [150.0000-2000.0000]"
-        );
+        assert_eq!(s, "FTMS + c NSI d Full ms2 645.8311 [150.0000-2000.0000]");
     }
 
     #[test]
@@ -356,10 +294,7 @@ mod tests {
         let idx = make_index(116.0, 892.0);
         let s = build_filter(&ev, &idx, Some(440.254), Some(35.0), None);
         // ITMS + CID code 4 → "cid"
-        assert_eq!(
-            s,
-            "ITMS + c NSI d Full ms2 440.2540@cid35.00 [116.0000-892.0000]"
-        );
+        assert_eq!(s, "ITMS + c NSI d Full ms2 440.2540 [116.0000-892.0000]");
     }
 
     #[test]
@@ -396,7 +331,7 @@ mod tests {
         let s = build_filter(&ev, &idx, Some(265.27), Some(35.0), None);
         assert_eq!(
             s,
-            "ITMS + c NSI d Full ms3 810.5000@cid35.00 265.2700@cid35.00 [100.0000-1000.0000]"
+            "ITMS + c NSI d Full ms3 810.5000 265.2700 [100.0000-1000.0000]"
         );
     }
 
@@ -417,9 +352,6 @@ mod tests {
         };
         let idx = make_index(150.0, 2000.0);
         let s = build_filter(&ev, &idx, Some(649.12), Some(35.0), Some(28.0));
-        assert_eq!(
-            s,
-            "FTMS + c NSI d Full ms2 649.1200@etd35.00@hcd28.00 [150.0000-2000.0000]"
-        );
+        assert_eq!(s, "FTMS + c NSI d Full ms2 649.1200 [150.0000-2000.0000]");
     }
 }

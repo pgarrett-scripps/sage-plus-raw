@@ -58,7 +58,8 @@ pub struct SpectrumRecord {
     pub scan_number: u32,
     pub ms_level: u32,
     pub is_ms1: bool,
-    /// Whether this MS2+ scan uses data-independent acquisition.
+    /// Legacy heuristic: true for a nondependent MS2+ scan.
+    /// This does not establish DIA and must not classify acquisition mode.
     pub is_dia: bool,
     /// Whether broadband isolation is enabled for this scan.
     pub is_wideband: bool,
@@ -100,7 +101,8 @@ pub struct ScanMetadata {
     pub data_size: u32,
     pub ms_level: u32,
     pub is_ms1: bool,
-    /// Whether this MS2+ scan uses data-independent acquisition.
+    /// Legacy heuristic: true for a nondependent MS2+ scan.
+    /// This does not establish DIA and must not classify acquisition mode.
     pub is_dia: bool,
     /// Whether broadband isolation is enabled for this scan.
     pub is_wideband: bool,
@@ -147,8 +149,8 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
         return None;
     }
     let first_scan = raw.run_header.sample_info.first_scan_number;
-    let scan_number = first_scan + idx;
-    let entry = &raw.scan_index[idx as usize];
+    let scan_number = first_scan.checked_add(idx)?;
+    let entry = raw.scan_index.get(idx as usize)?;
     let event = raw.scan_events.get(idx as usize);
     let params = raw.scan_params(scan_number);
 
@@ -162,7 +164,7 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
             .unwrap_or(1)
     };
     let polarity = if is_srm {
-        Some(Polarity::Positive)
+        None
     } else {
         event.and_then(|e| e.preamble.polarity())
     };
@@ -186,7 +188,7 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
         None
     };
 
-    let precursor = if !is_ms1 && event.is_none_or(|e| e.reactions.len() <= 1) {
+    let precursor = if level == 2 && event.is_none_or(|e| e.reactions.len() <= 1) {
         let info = if let Some(q1) = srm_q1 {
             PrecursorInfo {
                 target_mz: Some(q1),
@@ -196,7 +198,7 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
                 collision_energy: srm_ce,
                 ce_is_nce: false,
                 master_scan_number: None,
-                activation: event.and_then(|e| e.preamble.activation()),
+                activation: event.and_then(|e| e.qualified_activation(raw.version)),
                 analyzer: event.and_then(|e| e.preamble.analyzer()),
             }
         } else {
@@ -220,12 +222,14 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
                     .as_ref()
                     .map(|p| p.activation_energy_is_nce())
                     .unwrap_or(false);
-            let ae = ae_from_params.or_else(|| reaction.map(|r| r.energy).filter(|&e| e > 0.0));
+            // Reaction energy has no qualified unit, so only labeled values are exported.
+            let ae = ae_from_params;
             let master = params
                 .as_ref()
                 .and_then(|p| p.master_scan_number())
                 .filter(|&n| n > 0)
-                .map(|n| n as u32);
+                .map(|n| n as u32)
+                .filter(|&n| n >= first_scan && n < scan_number);
             PrecursorInfo {
                 target_mz: tm,
                 selected_mz: sm,
@@ -234,7 +238,7 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
                 collision_energy: ae,
                 ce_is_nce: ae_is_nce,
                 master_scan_number: master,
-                activation: event.and_then(|e| e.preamble.activation()),
+                activation: event.and_then(|e| e.qualified_activation(raw.version)),
                 analyzer: event.and_then(|e| e.preamble.analyzer()),
             }
         };
@@ -275,19 +279,19 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
 /// Extract a single spectrum's record from `raw` at scan-index `idx`
 /// (zero-based offset from the first scan).
 ///
-/// Returns `None` if the scan's peak arrays cannot be read (matches the
-/// silent-skip behaviour of [`write_mzml`]). `include_profile` controls
+/// Returns an error if the scan index is invalid or arrays cannot be read.
+/// `include_profile` controls
 /// whether profile-mode scans return the raw profile signal or the
 /// centroided peak list, matching [`write_mzml`].
-pub fn extract_spectrum<R: Read + Seek>(
+pub fn try_extract_spectrum<R: Read + Seek>(
     raw: &RawFileReader,
     source: &mut R,
     idx: u32,
     include_profile: bool,
-) -> Option<SpectrumRecord> {
+) -> Result<SpectrumRecord> {
     let (meta, mz, intensity, effective_scan_mode) =
         extract_parts(raw, source, idx, include_profile)?;
-    Some(SpectrumRecord {
+    Ok(SpectrumRecord {
         index: meta.index,
         scan_number: meta.scan_number,
         ms_level: meta.ms_level,
@@ -311,6 +315,27 @@ pub fn extract_spectrum<R: Read + Seek>(
     })
 }
 
+/// Compatibility extraction that discards decode errors.
+/// Use [`try_extract_spectrum`] for conversion or scientific processing.
+pub fn extract_spectrum<R: Read + Seek>(
+    raw: &RawFileReader,
+    source: &mut R,
+    idx: u32,
+    include_profile: bool,
+) -> Option<SpectrumRecord> {
+    try_extract_spectrum(raw, source, idx, include_profile).ok()
+}
+
+/// Iterate all scans without dropping failures. Each result corresponds to
+/// exactly one scan index. Collect into `Result<Vec<_>>` to stop on error.
+pub fn try_iter_spectra<'a, R: Read + Seek>(
+    raw: &'a RawFileReader,
+    source: &'a mut R,
+    include_profile: bool,
+) -> impl Iterator<Item = Result<SpectrumRecord>> + 'a {
+    (0..raw.num_scans).map(move |idx| try_extract_spectrum(raw, source, idx, include_profile))
+}
+
 /// A scan's metadata, its peak arrays and the scan mode those arrays are in.
 type ScanParts = (ScanMetadata, Vec<f64>, Vec<f32>, Option<crate::ScanMode>);
 
@@ -319,8 +344,19 @@ fn extract_parts<R: Read + Seek>(
     source: &mut R,
     idx: u32,
     include_profile: bool,
-) -> Option<ScanParts> {
-    let meta = scan_metadata(raw, idx)?;
+) -> Result<ScanParts> {
+    let meta = scan_metadata(raw, idx).ok_or(crate::Error::InvalidScanIndex(idx))?;
+    if !raw.flat_peaks
+        && raw
+            .scan_events
+            .get(idx as usize)
+            .and_then(|event| event.preamble.ms_power())
+            .is_none_or(|power| power == MsPower::Undefined)
+    {
+        return Err(crate::Error::UnsupportedOperation(
+            "missing or unknown scan event MS level",
+        ));
+    }
     let event = raw.scan_events.get(idx as usize);
     let (mz, intensity, effective_scan_mode) = resolve_scan_arrays(
         raw,
@@ -330,13 +366,21 @@ fn extract_parts<R: Read + Seek>(
         event,
         meta.scan_mode,
     )?;
-    Some((meta, mz, intensity, effective_scan_mode))
+    if mz.len() != intensity.len()
+        || mz.iter().any(|value| !value.is_finite() || *value <= 0.0)
+        || intensity.iter().any(|value| !value.is_finite())
+    {
+        return Err(crate::Error::UnsupportedOperation(
+            "invalid decoded peak arrays",
+        ));
+    }
+    Ok((meta, mz, intensity, effective_scan_mode))
 }
 
 /// Iterate every scan in `raw` as a [`SpectrumRecord`].
 ///
 /// Skipped scans (those for which the peak arrays cannot be decoded) are
-/// dropped silently, matching [`write_mzml`]. The returned iterator borrows
+/// dropped silently. Use [`try_iter_spectra`] for strict processing. The iterator borrows
 /// both `raw` and `source` for its lifetime.
 pub fn iter_spectra<'a, R: Read + Seek>(
     raw: &'a RawFileReader,
@@ -372,6 +416,17 @@ fn ms_level(power: MsPower) -> u32 {
     }
 }
 
+fn validate_profile_calibration(coeffs: &[f64], analyzer: Option<crate::Analyzer>) -> Result<()> {
+    let valid_shape = matches!(coeffs.len(), 4 | 5 | 7)
+        || (coeffs.is_empty() && analyzer == Some(crate::Analyzer::ITMS));
+    if !valid_shape || coeffs.iter().any(|value| !value.is_finite()) {
+        return Err(crate::Error::UnsupportedOperation(
+            "missing or unsupported profile calibration",
+        ));
+    }
+    Ok(())
+}
+
 /// Resolve the m/z and intensity arrays for a single scan.
 ///
 /// When `include_profile=true` AND the scan packet contains profile data, the
@@ -379,20 +434,29 @@ fn ms_level(power: MsPower) -> u32 {
 /// `effective_scan_mode = Some(ScanMode::Profile)`). Otherwise the centroid
 /// peak list is used.
 ///
-/// Returns `None` when the scan cannot be read (caller should skip it).
+/// Returns an error when the scan cannot be read.
 fn resolve_scan_arrays<R: Read + Seek>(
     raw: &RawFileReader,
     source: &mut R,
     scan_number: u32,
     include_profile: bool,
     event: Option<&ScanEvent>,
-    nominal_scan_mode: Option<crate::ScanMode>,
-) -> Option<(Vec<f64>, Vec<f32>, Option<crate::ScanMode>)> {
+    _nominal_scan_mode: Option<crate::ScanMode>,
+) -> Result<(Vec<f64>, Vec<f32>, Option<crate::ScanMode>)> {
     if include_profile && !raw.flat_peaks {
-        let packet = raw.read_scan(source, scan_number).ok()?;
+        let packet = raw.read_scan(source, scan_number)?;
         if let Some(profile) = packet.profile {
             let coeffs = event.map(|e| e.coefficients.as_slice()).unwrap_or(&[]);
+            validate_profile_calibration(coeffs, event.and_then(|e| e.preamble.analyzer()))?;
             let pairs = profile.to_mz_intensity(coeffs);
+            if pairs
+                .iter()
+                .any(|(mz, intensity)| !mz.is_finite() || *mz <= 0.0 || !intensity.is_finite())
+            {
+                return Err(crate::Error::UnsupportedOperation(
+                    "invalid decoded profile arrays",
+                ));
+            }
             let mz: Vec<f64> = pairs
                 .iter()
                 .filter(|(m, _)| *m > 0.0)
@@ -403,16 +467,16 @@ fn resolve_scan_arrays<R: Read + Seek>(
                 .filter(|(m, _)| *m > 0.0)
                 .map(|(_, i)| *i as f32)
                 .collect();
-            return Some((mz, int, Some(crate::ScanMode::Profile)));
+            return Ok((mz, int, Some(crate::ScanMode::Profile)));
         }
         let mz: Vec<f64> = packet.peaks.iter().map(|p| p.mz).collect();
         let int: Vec<f32> = packet.peaks.iter().map(|p| p.abundance).collect();
-        return Some((mz, int, nominal_scan_mode));
+        return Ok((mz, int, Some(crate::ScanMode::Centroid)));
     }
-    let peaks = raw.read_peaks_only(source, scan_number).ok()?;
+    let peaks = raw.read_peaks_only(source, scan_number)?;
     let mz: Vec<f64> = peaks.iter().map(|p| p.mz).collect();
     let int: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
-    Some((mz, int, nominal_scan_mode))
+    Ok((mz, int, Some(crate::ScanMode::Centroid)))
 }
 
 // -- Adapter / canonical writer wrappers --
@@ -428,10 +492,7 @@ fn resolve_scan_arrays<R: Read + Seek>(
 use openmassspec_core as msc;
 
 const SOFTWARE_NAME: &str = "opentfraw";
-// Pinned for byte-identical output across crate version bumps. The mzML
-// `<software version=...>` is informational; downstream tools do not key off
-// it. If you change this, also update the conformance baseline.
-const SOFTWARE_VERSION: &str = "0.1.0";
+const SOFTWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// PSI-MS CV term for the source file format (Thermo RAW).
 fn source_file_format_cv() -> msc::CvTerm {
@@ -448,8 +509,8 @@ fn native_id_format_cv() -> msc::CvTerm {
 fn instrument_cv(raw: &RawFileReader) -> msc::CvTerm {
     if let Some(model) = raw.instrument_model {
         let known: &[(&str, &str, &str)] = &[
-            ("Orbitrap Astral", "MS:1003355", "Orbitrap Astral"),
-            ("Orbitrap Ascend", "MS:1003028", "Orbitrap Ascend"),
+            ("Orbitrap Astral", "MS:1003378", "Orbitrap Astral"),
+            ("Orbitrap Ascend", "MS:1003356", "Orbitrap Ascend"),
             ("Orbitrap Eclipse", "MS:1003029", "Orbitrap Eclipse"),
             (
                 "Orbitrap Fusion Lumos",
@@ -464,12 +525,12 @@ fn instrument_cv(raw: &RawFileReader) -> msc::CvTerm {
             ),
             (
                 "Orbitrap Exploris 240",
-                "MS:1003098",
+                "MS:1003094",
                 "Orbitrap Exploris 240",
             ),
             (
                 "Orbitrap Exploris 120",
-                "MS:1003199",
+                "MS:1003095",
                 "Orbitrap Exploris 120",
             ),
             ("Q Exactive HF-X", "MS:1002877", "Q Exactive HF-X"),
@@ -477,23 +538,23 @@ fn instrument_cv(raw: &RawFileReader) -> msc::CvTerm {
             ("Q Exactive Plus", "MS:1002634", "Q Exactive Plus"),
             ("Q Exactive UHMR", "MS:1003245", "Q Exactive UHMR"),
             ("Q Exactive", "MS:1001911", "Q Exactive"),
-            ("LTQ Orbitrap Velos Pro", "MS:1001742", "LTQ Orbitrap Velos"),
+            ("LTQ Orbitrap Velos Pro", "MS:1003096", "Orbitrap Velos Pro"),
             ("LTQ Orbitrap Velos", "MS:1001742", "LTQ Orbitrap Velos"),
-            ("LTQ Orbitrap Elite", "MS:1001910", "LTQ Orbitrap Elite"),
+            ("LTQ Orbitrap Elite", "MS:1001910", "Orbitrap Elite"),
             ("LTQ Orbitrap XL", "MS:1000556", "LTQ Orbitrap XL"),
             ("LTQ Orbitrap", "MS:1000449", "LTQ Orbitrap"),
-            ("LTQ Velos Pro", "MS:1001096", "LTQ Velos Pro"),
+            ("LTQ Velos Pro", "MS:1003495", "Velos Pro"),
             ("LTQ Velos", "MS:1000855", "LTQ Velos"),
             ("LTQ XL", "MS:1000854", "LTQ XL"),
             ("LTQ FT", "MS:1000448", "LTQ FT"),
             ("LTQ", "MS:1000447", "LTQ"),
-            ("TSQ Altis", "MS:1003108", "TSQ Altis"),
-            ("TSQ Quantiva", "MS:1002498", "TSQ Quantiva"),
-            ("TSQ Endura", "MS:1002497", "TSQ Endura"),
+            ("TSQ Altis", "MS:1002874", "TSQ Altis"),
+            ("TSQ Quantiva", "MS:1002418", "TSQ Quantiva"),
+            ("TSQ Endura", "MS:1002419", "TSQ Endura"),
             ("TSQ Vantage", "MS:1001510", "TSQ Vantage"),
-            ("LCQ Classic", "MS:1000443", "LCQ Classic"),
-            ("LCQ Deca", "MS:1000446", "LCQ Deca"),
-            ("LCQ Advantage", "MS:1000590", "LCQ Advantage"),
+            ("LCQ Classic", "MS:1000168", "LCQ Classic"),
+            ("LCQ Deca", "MS:1000554", "LCQ Deca"),
+            ("LCQ Advantage", "MS:1000167", "LCQ Advantage"),
         ];
         for (prefix, acc, name) in known {
             if model.starts_with(prefix) {
@@ -717,7 +778,7 @@ fn srm_chromatograms(
             index: 0,
             id,
             chromatogram_type: Some(msc::CvTerm::new(
-                "MS:1000627",
+                "MS:1001473",
                 "selected reaction monitoring chromatogram",
             )),
             precursor_mz: Some(q1),
@@ -762,12 +823,16 @@ fn build_chromatograms(raw: &RawFileReader) -> Vec<msc::ChromatogramRecord> {
 /// `openmassspec_core`-shaped consumer (the canonical mzML writer, a column
 /// store ingester, future Arrow bridge, ...). For the common case of "I just
 /// want mzML out", call [`write_mzml`] or [`write_indexed_mzml`] directly.
+/// The external `SpectrumSource` trait cannot carry errors. Its iterator stops
+/// at the first failure and stores it for [`Self::finish`]. Calling an external
+/// canonical writer directly requires checking `finish` afterward.
 pub struct OpenTfRawSource<'a, R: Read + Seek> {
     raw: &'a RawFileReader,
     source: &'a mut R,
     raw_filename: &'a str,
     include_profile: bool,
     extra_fields: ExtraFields,
+    error: Option<crate::Error>,
 }
 
 impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
@@ -783,7 +848,30 @@ impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
             raw_filename,
             include_profile,
             extra_fields: ExtraFields::All,
+            error: None,
         }
+    }
+
+    /// Return any failure recorded by the infallible vendor-neutral iterator.
+    /// Call after fully consuming that iterator, including after a canonical
+    /// writer returns success. Prefer this adapter's strict writer methods.
+    pub fn finish(&mut self) -> Result<()> {
+        self.error.take().map_or(Ok(()), Err)
+    }
+
+    /// Write mzML and propagate source failures as well as output failures.
+    /// On any error, discard the output because it may contain a partial run.
+    pub fn write_mzml<W: Write>(&mut self, out: &mut W) -> Result<()> {
+        validate_export(self.raw)?;
+        msc::write_mzml(self, out)?;
+        self.finish()
+    }
+
+    /// Write indexed mzML with strict source error propagation.
+    pub fn write_indexed_mzml<W: Write>(&mut self, out: &mut W) -> Result<()> {
+        validate_export(self.raw)?;
+        msc::write_indexed_mzml(self, out)?;
+        self.finish()
     }
 
     /// Choose which `opentfraw.*` values go into each spectrum's `extra`
@@ -833,17 +921,26 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
         let source = &mut *self.source;
         let include_profile = self.include_profile;
         let extra_fields = &self.extra_fields;
+        let error = &mut self.error;
         let mut idx: u32 = 0;
         Box::new(std::iter::from_fn(move || {
-            while idx < n {
-                let cur = idx;
-                idx += 1;
-                if let Some(parts) = extract_parts(raw, source, cur, include_profile) {
+            if idx >= n || error.is_some() {
+                return None;
+            }
+            let cur = idx;
+            idx += 1;
+            match validate_export_scan(raw, cur)
+                .and_then(|()| extract_parts(raw, source, cur, include_profile))
+            {
+                Ok(parts) => {
                     let extra = scan_extras(raw, &parts.0, extra_fields);
-                    return Some(to_msc_record(parts, extra));
+                    Some(to_msc_record(parts, extra))
+                }
+                Err(err) => {
+                    *error = Some(err);
+                    None
                 }
             }
-            None
         }))
     }
 
@@ -858,6 +955,61 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
     }
 }
 
+fn validate_export_scan(raw: &RawFileReader, idx: u32) -> Result<()> {
+    if let Some(event) = raw.scan_events.get(idx as usize) {
+        if event.reactions.len() > 1 {
+            return Err(crate::Error::UnsupportedOperation(
+                "mzML export cannot represent multiple precursor reactions",
+            ));
+        }
+        if event.preamble.bytes.get(6).is_some_and(|&level| level > 2) {
+            return Err(crate::Error::UnsupportedOperation(
+                "mzML export cannot represent MS3 or higher precursor chains",
+            ));
+        }
+    }
+    let scan_number = raw
+        .run_header
+        .sample_info
+        .first_scan_number
+        .checked_add(idx)
+        .ok_or(crate::Error::InvalidScanIndex(idx))?;
+    if raw.scan_parameters(scan_number).is_some_and(|record| {
+        record.values.iter().any(|(key, value)| {
+            (key.starts_with("SPS Mass ") || key.starts_with("SPS Masses"))
+                && match value {
+                    crate::generic_data::GenericValue::Float32(v) => *v > 0.0,
+                    crate::generic_data::GenericValue::Float64(v) => *v > 0.0,
+                    crate::generic_data::GenericValue::String(v) => !v.trim().is_empty(),
+                    _ => false,
+                }
+        })
+    }) {
+        return Err(crate::Error::UnsupportedOperation(
+            "mzML export cannot represent SPS precursors",
+        ));
+    }
+    let meta = scan_metadata(raw, idx).ok_or(crate::Error::InvalidScanIndex(idx))?;
+    if meta.ms_level > 1
+        && meta
+            .precursor
+            .as_ref()
+            .is_none_or(|p| p.activation.is_none())
+    {
+        return Err(crate::Error::UnsupportedOperation(
+            "mzML writer cannot represent unknown activation without inventing CID",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_export(raw: &RawFileReader) -> Result<()> {
+    for idx in 0..raw.num_scans {
+        validate_export_scan(raw, idx)?;
+    }
+    Ok(())
+}
+
 // -- Public mzML entry points (unchanged signatures) --
 
 /// Write the contents of `raw` as mzML 1.1.0 to `out`.
@@ -868,8 +1020,8 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
 /// * `include_profile` - when `true`, profile-mode scans export the raw
 ///   profile signal instead of the centroid peak list.
 ///
-/// All spectra are written; no filtering is applied. Scans for which peak
-/// data cannot be read are skipped silently.
+/// All spectra are written. Unreadable peak data returns an error.
+/// Discard the output on any error because it may contain a partial run.
 pub fn write_mzml<R, W>(
     raw: &RawFileReader,
     source: &mut R,
@@ -881,18 +1033,7 @@ where
     R: Read + Seek,
     W: Write,
 {
-    if raw
-        .scan_events
-        .iter()
-        .any(|event| event.reactions.len() > 1)
-    {
-        return Err(crate::Error::UnsupportedOperation(
-            "mzML export cannot represent multiple precursor reactions",
-        ));
-    }
-    let mut src = OpenTfRawSource::new(raw, source, raw_filename, include_profile);
-    msc::write_mzml(&mut src, out)?;
-    Ok(())
+    OpenTfRawSource::new(raw, source, raw_filename, include_profile).write_mzml(out)
 }
 
 /// Write the contents of `raw` as an indexed mzML 1.1.0 document.
@@ -913,24 +1054,26 @@ where
     R: Read + Seek,
     W: Write,
 {
-    if raw
-        .scan_events
-        .iter()
-        .any(|event| event.reactions.len() > 1)
-    {
-        return Err(crate::Error::UnsupportedOperation(
-            "mzML export cannot represent multiple precursor reactions",
-        ));
-    }
-    let mut src = OpenTfRawSource::new(raw, source, raw_filename, include_profile);
-    msc::write_indexed_mzml(&mut src, out)?;
-    Ok(())
+    OpenTfRawSource::new(raw, source, raw_filename, include_profile).write_indexed_mzml(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn profile_calibration_rejects_missing_ftms_and_nonfinite_values() {
+        assert!(validate_profile_calibration(&[], Some(crate::Analyzer::FTMS)).is_err());
+        assert!(validate_profile_calibration(&[], None).is_err());
+        assert!(validate_profile_calibration(&[], Some(crate::Analyzer::ITMS)).is_ok());
+        assert!(validate_profile_calibration(&[0.0, 1.0], Some(crate::Analyzer::FTMS)).is_err());
+        assert!(validate_profile_calibration(
+            &[0.0, 0.0, f64::NAN, 1.0],
+            Some(crate::Analyzer::FTMS)
+        )
+        .is_err());
+    }
 
     #[test]
     fn isolation_target_is_not_inferred_from_monoisotopic_mass() {
@@ -1007,7 +1150,7 @@ mod tests {
         assert_eq!(r1.product_mz, Some(100.5)); // (100 + 101) / 2
         assert_eq!(r1.id, "SRM Q1=500.0000 Q3=100.5000");
         let cv = r1.chromatogram_type.as_ref().unwrap();
-        assert_eq!(cv.accession, "MS:1000627");
+        assert_eq!(cv.accession, "MS:1001473");
         assert_eq!(cv.name, "selected reaction monitoring chromatogram");
         assert_eq!(r1.time_sec, vec![0.0, 30.0]);
         assert_eq!(r1.intensity, vec![10.0, 12.0]);

@@ -14,6 +14,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - run: cargo fmt --all --check
       - run: cargo clippy --locked -p opentfraw --all-targets -- -D warnings
       - run: cargo test --locked -p opentfraw
+      - run: python scripts/fetch_public_fixtures.py
+      - run: cargo test --locked -p opentfraw --test public_fixtures -- --ignored
+        env:
+          THERMO_PUBLIC_CORPUS: corpus/public
+      - run: cargo check --locked -p opentfraw-py
+      - run: cargo package --locked -p opentfraw
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - run: cargo check --locked -p opentfraw

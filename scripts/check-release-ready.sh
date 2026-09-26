@@ -1,14 +1,5 @@
 #!/usr/bin/env bash
-# Checks that the most recent ci.yml and audit.yml runs for a commit both
-# completed successfully, before that commit is tagged for release.
-#
-# publish.yml triggers on `push: tags: ["v*"]` and has no way to `needs:` a
-# job defined in ci.yml or audit.yml (GitHub Actions can't cross-reference
-# jobs across workflow files), so this has to be checked before the tag is
-# created, not inside publish.yml itself. See RELEASING.md.
-#
-# Usage: scripts/check-release-ready.sh [ref]
-#   ref defaults to HEAD.
+# Verify Reader checks succeeded for the exact private release commit.
 
 set -euo pipefail
 
@@ -51,11 +42,10 @@ check_workflow() {
 
 ok=1
 
-check_workflow ci.yml || ok=0
-check_workflow audit.yml || ok=0
+check_workflow reader.yml || ok=0
 
 if [[ "$ok" -ne 1 ]]; then
     exit 1
 fi
 
-echo "Release ready: CI and audit are both green for $sha."
+echo "Release ready: Reader checks is green for $sha."

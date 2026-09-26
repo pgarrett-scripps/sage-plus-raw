@@ -692,7 +692,8 @@ impl RawFile {
             .ok_or_else(|| PyValueError::new_err("non-UTF8 file name"))?;
         let mut source = OpenTfRawSource::new(&self.reader, &mut *src, raw_filename, false)
             .with_extra_fields(selection);
-        openmassspec_core::write_mzml(&mut source, &mut out)
+        source
+            .write_mzml(&mut out)
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
         Ok(())
     }

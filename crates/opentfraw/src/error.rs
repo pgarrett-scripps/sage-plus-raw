@@ -2,6 +2,9 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("invalid zero-based scan index: {0}")]
+    InvalidScanIndex(u32),
+
     #[error("invalid scan event: {0}")]
     InvalidScanEvent(String),
 

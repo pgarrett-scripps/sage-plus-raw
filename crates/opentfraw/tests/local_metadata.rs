@@ -5,8 +5,19 @@ use std::path::PathBuf;
 #[ignore = "requires THERMO_LARGE_RAW and THERMO_PUBLIC_CORPUS local fixture paths"]
 fn local_metadata_regressions() {
     let large = std::env::var("THERMO_LARGE_RAW").unwrap();
-    let raw = RawFileReader::open_path(large).unwrap();
+    let raw = RawFileReader::open_path(&large).unwrap();
     assert_eq!(raw.num_scans, 5445);
+    let mut source = std::fs::File::open(&large).unwrap();
+    let mut scans = 0;
+    let mut peaks = 0;
+    for spectrum in opentfraw::try_iter_spectra(&raw, &mut source, false) {
+        let spectrum = spectrum.unwrap();
+        scans += 1;
+        peaks += spectrum.mz.len();
+        assert_eq!(spectrum.scan_mode, Some(opentfraw::ScanMode::Centroid));
+    }
+    assert_eq!(scans, 5445);
+    assert_eq!(peaks, 470235);
     assert_eq!(
         raw.scan_events
             .iter()

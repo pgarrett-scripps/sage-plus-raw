@@ -4,7 +4,7 @@ members = ["crates/opentfraw", "crates/opentfraw-py"]
 default-members = ["crates/opentfraw"]
 
 [workspace.package]
-version = "1.6.0"
+version = "1.6.1-private.1"
 edition = "2021"
 rust-version = "1.85"
 authors = ["Nathan Riley <git@nathanriley.com>"]

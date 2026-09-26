@@ -1,97 +1,48 @@
-# Private OpenTFRaw branch
+# OpenTFRaw private reader
 
-Native Rust Thermo RAW reader maintained for MSConvert RS. This branch includes qualified v66 event decoding, multiplexed precursor preservation and metadata corrections. See [review findings, validation and remaining limits](REVIEW.md).
+Native Rust Thermo RAW reading without .NET or vendor DLLs. This private branch preserves the upstream Apache-2.0 history and adds qualified v66 decoding, scientific metadata corrections and strict extraction. The private release is `1.6.1-private.1`.
 
-`cargo test --locked` targets the native reader by default. The original upstream documentation follows and describes capabilities beyond the layouts qualified in this branch.
+Install through an authenticated Git checkout, pinned to a reviewed commit or private release tag. The crate name remains `opentfraw`. Public crates.io and PyPI packages belong to upstream and do not include these changes.
 
-# OpenTFRaw
+```toml
+[dependencies]
+opentfraw = { git = "https://github.com/pgarrett-scripps/opentfraw", tag = "v1.6.1-private.1" }
+```
 
-[![CI](https://github.com/Sigilweaver/OpenTFRaw/actions/workflows/ci.yml/badge.svg)](https://github.com/Sigilweaver/OpenTFRaw/actions/workflows/ci.yml)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20470601.svg)](https://doi.org/10.5281/zenodo.20470601)
-[![crates.io](https://img.shields.io/crates/v/opentfraw.svg)](https://crates.io/crates/opentfraw)
-[![PyPI](https://img.shields.io/pypi/v/opentfraw.svg)](https://pypi.org/project/opentfraw/)
-[![docs.rs](https://img.shields.io/docsrs/opentfraw)](https://docs.rs/opentfraw)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Rust MSRV](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+## Reading and exporting
 
-> Part of the [OpenMassSpec](https://github.com/Sigilweaver/OpenMassSpec)
-> stack for mass spectrometry raw-file access.
+Open with `RawFileReader::open_path`. Use `try_extract_spectrum` for one zero-based scan index or `try_iter_spectra` for a stream of `Result<SpectrumRecord>` values. Both propagate unreadable arrays and validate emitted peak values. Empty valid spectra remain valid. The low-level `read_scan_peaks` API remains available.
 
-Rust and Python reader for Thermo Fisher `.raw` mass spectrometry files,
-covering format versions 8 through 66 (LCQ Classic through Orbitrap
-Astral and modern TSQ).
+`scan_metadata` reads metadata without reading peaks. Precursor targets and selected monoisotopic masses remain separate. Centroid arrays report centroid mode even when their source acquisition was profile mode. Profile extraction requires a supported calibration shape, or explicitly identified ion-trap m/z coordinates.
 
-Documentation: [sigilweaver.app/opentfraw/docs](https://sigilweaver.app/opentfraw/docs)
+The legacy `extract_spectrum` and `iter_spectra` functions remain available for compatibility. They discard errors and must not be used for lossless conversion.
 
-## Install
+`write_mzml`, `write_indexed_mzml` and the matching `OpenTfRawSource` methods propagate input and output failures. Discard output on any failure because it may be partial. The external `openmassspec_core::SpectrumSource` trait cannot return errors, so users calling its iterator or canonical writer directly must call `OpenTfRawSource::finish` afterward. The adapter stops at its first failure.
 
-**Prefer [`openmassspec-io`](https://github.com/Sigilweaver/OpenMassSpec)
-with the `thermo` feature/extra** unless you need this parser standalone
-(minimal dependencies, or building your own abstraction) - the umbrella
-gives you format auto-detection, mzML conversion, and Arrow streaming
-across all wired-in vendors for free:
+## Qualified scope and limits
+
+- Qualified v66 event layouts include mixed 232-byte and 288-byte records and the documented four-reaction MSX layout.
+- Independent public HCD and ETD references distinguish v66 reaction tags 11 and 9. The preamble activation byte alone cannot distinguish these acquisitions. Other tags remain unknown. Reconstructed filters include activation only when qualified.
+- Multiple reactions remain available in `scan_events`. A singular precursor is unavailable for multiplexed scans and MS3 or higher.
+- Convenience mzML export rejects MSX, SPS, MS3 or higher and unknown activation. Its shared writer would otherwise invent CID for unknown activation.
+- Nondependent MS2 is not sufficient evidence of DIA. The legacy `is_dia` boolean is only that heuristic, not an acquisition classification.
+- Collision energy is exported only from labeled trailer values. Unqualified reaction energy units are not guessed. SRM polarity and isolation width remain unknown when not sourced.
+- Parent scan IDs outside the current run or referring to the current or a later scan are omitted. Full cropped-file parent identity reconstruction is not implemented.
+- Unsupported SPS and source-CID fixture layouts return errors. Other upstream format revisions remain available but are not comprehensively qualified by this private release.
+
+See [REVIEW.md](REVIEW.md) for evidence and remaining limits. Original upstream format documentation is in `docs/docs`, and may describe behavior superseded by this private branch.
+
+## Validation
 
 ```sh
-cargo add openmassspec-io --features thermo
+cargo fmt --all --check
+cargo clippy --locked -p opentfraw --all-targets -- -D warnings
+cargo test --locked -p opentfraw
+python3 scripts/fetch_public_fixtures.py
+THERMO_PUBLIC_CORPUS=corpus/public cargo test --locked -p opentfraw --test public_fixtures -- --ignored
+cargo package --locked -p opentfraw
 ```
 
-```sh
-pip install openmassspec[thermo]
-```
+CI runs native checks, public fixture regressions, Python binding compilation and package verification on Linux, macOS and Windows. Rust 1.85 is checked separately. The optional upstream Python binding workspace member is retained but Python wheels are not distributed by this private release.
 
-Standalone:
-
-Rust:
-
-```sh
-cargo add opentfraw
-```
-
-Python:
-
-```sh
-pip install opentfraw
-```
-
-## Quickstart
-
-Rust:
-
-```rust
-use opentfraw::RawFileReader;
-
-let raw = RawFileReader::open_path("sample.raw")?;
-let mut file = std::fs::File::open("sample.raw")?;
-for scan_num in 1..=raw.num_scans {
-    let peaks = raw.read_scan_peaks(&mut file, scan_num)?;
-    println!("scan {scan_num}: {} peaks", peaks.mz.len());
-}
-```
-
-Python:
-
-```python
-import opentfraw
-
-raw = opentfraw.RawFile("run.raw")
-mz, intensity = raw.peaks(3)
-print(raw.scan(3)["filter_string"])
-raw.to_mzml("run.mzML")
-```
-
-See the [docs site](https://sigilweaver.app/opentfraw/docs) for the full
-guide, format specification, and API reference.
-
-## Used by
-
-| Project | Description |
-|---------|-------------|
-| [Mascope](https://github.com/karsa-oy/mascope) by [Karsa Oy](https://github.com/karsa-oy) | Mass spectrometry data analysis platform using OpenTFRaw to ingest Thermo `.raw` files. |
-
-## License
-
-Apache-2.0. See [LICENSE](LICENSE).
-
-The format specification was developed by binary analysis of public
-mass-spectrometry datasets (PRIDE accessions). See
-[CORPUS.md](CORPUS.md) and [ATTRIBUTION.md](ATTRIBUTION.md).
+Private large acquisitions are never committed. The local regression additionally exercises the documented 5,445-scan acquisition. See [RELEASING.md](RELEASING.md) for private artifact distribution.

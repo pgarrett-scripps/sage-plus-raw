@@ -1,0 +1,13 @@
+{
+  "revision": "699dd48953f81e4b14a02e5ae018a3f13c3b3b54",
+  "files": {
+    "BSA-FT-ETD.raw": "d63a86285709d16115b7cc13453652b72589d6d428adc912df9b0ba6063190b3",
+    "BSA-FT-ETD.mzML": "031805a5e837f407b84162b1576202e01d7855d6375a677a294ae90ea15f829f",
+    "BSA-FT-HCD.raw": "45dbaea253856f3fe02c71ebf4abc747874f3fe6e3214ef0521809062164e381",
+    "BSA-FT-HCD.mzML": "501d3d725d0ef4cfa9017c62d9c9dbf63c99edf7a305a3ae4b07e97d010b47dc",
+    "FT-HCD-MSX.raw": "b3d97b3856dd1e8dd6846d21c58b1b1824c309480908fe4c2dfabe152bd6dd7b",
+    "IsolationMzOffset-ReportedMassOffset.raw": "e211d5c55995b5c3538798dc59d81454d00536561d8be66626c35f69414d80cb",
+    "IT-HCD-SPS.raw": "c18f8d01e3400702c551b7258d2bc15e2fb78452ac98108709b0956c41d4c465",
+    "source_cid_test_3scans.raw": "540856ef9a02b533b499519abb0b3fa7d60a0c75d0c8c5f2c39452ef6d41d19c"
+  }
+}
