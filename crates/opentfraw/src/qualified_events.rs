@@ -1,6 +1,6 @@
 //! Strict decoding for the qualified v66 Orbitrap layout used by MSConvert RS.
+use crate::binary_reader::BinaryReader;
 use crate::error::{Error, Result};
-use crate::reader::BinaryReader;
 use crate::scan_event::{FractionCollector, Reaction, ScanEvent, ScanEventPreamble};
 use std::io::{Read, Seek};
 

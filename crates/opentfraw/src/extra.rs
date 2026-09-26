@@ -13,8 +13,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::metadata::{ScanParams, StatusLogEntry};
 use crate::mzml::ScanMetadata;
-use crate::reader::{ScanParams, StatusLogEntry};
 use crate::RawFileReader;
 
 /// Which `opentfraw.*` extra fields to emit. Keys are the full names returned
@@ -261,13 +261,13 @@ mod tests {
     }
 
     /// Every typed trailer and status-log accessor must reach the outputs,
-    /// either as a first-class field (wired in `mzml.rs`) or as an extra
+    /// either as a first-class field (wired in `spectrum.rs`) or as an extra
     /// field registered above. Aliases and raw-record passthroughs are
     /// listed explicitly. A new accessor fails this test until it is wired.
     #[test]
     fn every_typed_accessor_is_exposed() {
-        let reader = include_str!("reader.rs");
-        let wired = [include_str!("mzml.rs"), include_str!("extra.rs")].concat();
+        let metadata = include_str!("metadata.rs");
+        let wired = [include_str!("spectrum.rs"), include_str!("extra.rs")].concat();
         let cases: [(&str, &[&str]); 2] = [
             (
                 "impl<'a> ScanParams<'a> {",
@@ -287,7 +287,7 @@ mod tests {
             ),
         ];
         for (header, exempt) in cases {
-            let names = accessors(reader, header);
+            let names = accessors(metadata, header);
             assert!(!names.is_empty(), "no accessors found for {header}");
             for name in names {
                 if exempt.contains(&name) {
@@ -296,7 +296,7 @@ mod tests {
                 assert!(
                     wired.contains(&format!(".{name}(")),
                     "{header} accessor `{name}` reaches no output: wire it in \
-                     mzml.rs (first-class field) or register it in extra.rs"
+                     spectrum.rs (first-class field) or register it in extra.rs"
                 );
             }
         }

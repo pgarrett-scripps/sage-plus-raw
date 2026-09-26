@@ -1,5 +1,5 @@
+use crate::binary_reader::BinaryReader;
 use crate::error::Result;
-use crate::reader::BinaryReader;
 use std::io::{Read, Seek};
 
 /// Audit tag embedded in FileHeader (112 bytes).

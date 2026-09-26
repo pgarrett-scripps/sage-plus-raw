@@ -25,9 +25,12 @@
 //! The legacy extraction helpers discard errors and exist only for compatibility.
 
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
+mod binary_reader;
 mod error;
+mod metadata;
 mod qualified_events;
 mod reader;
+mod spectrum;
 mod types;
 
 pub(crate) mod bytes;
@@ -54,10 +57,11 @@ pub mod seq_row;
 pub use device::{DetectedInstrument, DeviceFamily};
 pub use error::{Error, Result};
 pub use extra::ExtraFields;
+pub use metadata::{ScanParams, StatusLogEntry};
 pub use mzml::{
     extract_spectrum, iter_spectra, scan_metadata, try_extract_spectrum, try_iter_spectra,
     write_indexed_mzml, write_mzml, PrecursorInfo, ScanMetadata, SpectrumRecord,
 };
-pub use reader::{ControllerInfo, ControllerType, RawFileReader, ScanParams, StatusLogEntry};
+pub use reader::{ControllerInfo, ControllerType, RawFileReader};
 pub use scan_format::ScanDataFormat;
 pub use types::*;

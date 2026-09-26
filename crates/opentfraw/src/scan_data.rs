@@ -1,5 +1,5 @@
+use crate::binary_reader::BinaryReader;
 use crate::error::{Error, Result};
-use crate::reader::BinaryReader;
 use std::io::{Read, Seek, SeekFrom};
 
 /// A single centroid peak (m/z + abundance).

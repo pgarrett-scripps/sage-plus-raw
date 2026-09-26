@@ -1,5 +1,5 @@
+use crate::binary_reader::BinaryReader;
 use crate::error::Result;
-use crate::reader::BinaryReader;
 use std::io::{Read, Seek};
 
 /// Precursor reaction info for MS2+ scans (32 bytes).

@@ -1,5 +1,5 @@
+use crate::binary_reader::BinaryReader;
 use crate::error::Result;
-use crate::reader::BinaryReader;
 use std::io::{Read, Seek};
 
 /// An error log entry.

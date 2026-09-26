@@ -1,6 +1,6 @@
 use crate::audit_tag::AuditTag;
+use crate::binary_reader::BinaryReader;
 use crate::error::{Error, Result};
-use crate::reader::BinaryReader;
 use std::io::{Read, Seek};
 
 /// The 1356-byte file header at offset 0x0000.

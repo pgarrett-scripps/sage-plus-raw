@@ -1,5 +1,5 @@
+use crate::binary_reader::BinaryReader;
 use crate::error::{Error, Result};
-use crate::reader::BinaryReader;
 use crate::types::GenericType;
 use std::io::{Cursor, Read, Seek};
 
