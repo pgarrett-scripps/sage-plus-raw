@@ -1,74 +1,23 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+This policy applies to the independent `opentfraw-reader` fork maintained in [pgarrett-scripps/opentfraw](https://github.com/pgarrett-scripps/opentfraw). It does not promise support from the upstream OpenTFRaw maintainers.
 
-| Version | Supported |
-| ------- | --------- |
-| latest  | Yes       |
-| older   | No        |
+## Reporting
 
-Only the latest published release receives security updates.
+While the repository is private, collaborators should contact its owner through their established private project channel. Do not disclose exploit details in public issues or send private acquisition data without permission.
 
-## Reporting a Vulnerability
+Before making the repository public, maintainers must enable and verify GitHub private vulnerability reporting. The intended public reporting location is [this repository's security advisories](https://github.com/pgarrett-scripps/opentfraw/security/advisories). Its availability must be checked during the launch gate. This document does not claim the public reporting service is already enabled.
 
-**Do not open a public GitHub issue for security vulnerabilities.**
+Include the commit or package version, operating system, Rust version, expected behavior and a minimal reproduction. Prefer synthetic byte sequences over sensitive RAW files. Maintainers will coordinate disclosure and attribution with the reporter. No acknowledgment or remediation deadline is guaranteed during release preparation.
 
-Report privately via [GitHub Security Advisories](https://github.com/Sigilweaver/OpenTFRaw/security/advisories/new).
+## Scope and supported versions
 
-Include:
+The current launch candidate and the most recent private release are evaluated for security fixes. Earlier upstream releases are outside this fork's support commitment. No public crate release currently exists under the new package identity.
 
-- A description of the vulnerability and its potential impact.
-- Steps to reproduce or a proof of concept (a small `.raw` file is
-  ideal; small synthetic byte sequences are even better).
-- The crate version (Rust or Python wheel) and OS / toolchain.
+Relevant findings include malformed-input panics, excessive allocation, infinite loops, unintended file writes and reachable dependency vulnerabilities. Scientific decoding errors also matter, even when they do not create a security vulnerability.
 
-Expect an initial acknowledgment within 7 days.
+The parser forbids unsafe Rust in its own crate. That restriction is not a guarantee that dependencies or platform libraries contain no unsafe code. Treat untrusted files as potentially hostile and apply application-level resource limits when appropriate.
 
-## Scope
+## Distribution
 
-In scope:
-
-- **Parser correctness on malicious `.raw` input.** OpenTFRaw parses
-  the Thermo Fisher `.raw` binary format. Panics, out-of-bounds
-  reads, undefined behavior, infinite loops, or memory exhaustion
-  triggered by a crafted file are in scope.
-- **Memory safety**: the crate forbids `unsafe_code`. A demonstrated
-  unsafe-code violation reachable from safe API is a security bug.
-- **Path-traversal or arbitrary-file-write bugs** in any helper that
-  derives output paths from input filenames.
-- **Supply-chain integrity** of published artifacts on crates.io and
-  PyPI.
-
-Out of scope:
-
-- Denial of service via legitimately large `.raw` files. Thermo
-  acquisitions can be hundreds of GB by design.
-- Inaccurate decoding of specific Thermo acquisition modes. Those
-  are correctness bugs - file them as regular issues.
-- Vulnerabilities in third-party crates with no demonstrated exploit
-  path through OpenTFRaw.
-
-## Disclosure
-
-We follow coordinated disclosure. Reporters are credited in the
-release notes unless they prefer to remain anonymous. We aim to ship
-a fix within 30 days of confirming a high or critical issue.
-
-## Note on reverse engineering
-
-OpenTFRaw was developed by clean-room reverse engineering of public
-artifacts (PRIDE deposits, published specifications, format
-documentation in the public domain). It does not depend on any
-Thermo SDK or binary blob, and contains no Thermo proprietary code.
-Bug reports about parser accuracy or coverage are welcome but are
-not security issues unless they involve one of the categories above.
-
-## Stack context
-
-OpenTFRaw is one of three vendor readers in the
-[OpenMassSpec](https://github.com/Sigilweaver/OpenMassSpec) stack.
-Sibling readers:
-[OpenWRaw](https://github.com/Sigilweaver/OpenWRaw) (Waters),
-[OpenTimsTDF](https://github.com/Sigilweaver/OpenTimsTDF) (Bruker).
-Shared foundation:
-[openmassspec-core](https://github.com/Sigilweaver/OpenMassSpecCore).
+The real Rust manifests retain `publish = false`. Python packaging retains a private distribution classifier. CI runs registry dry-runs only inside disposable copies. There are no registry upload, website deployment or visibility-changing workflows.

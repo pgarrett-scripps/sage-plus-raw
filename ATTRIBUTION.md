@@ -1,5 +1,11 @@
 # Credits
 
+## Upstream OpenTFRaw
+
+This independently maintained fork derives from [OpenTFRaw](https://github.com/Sigilweaver/OpenTFRaw), originally authored by Nathan Riley and contributors. Original copyright 2026 Sigilweaver Holdings LLC and Apache-2.0 licensing are retained. See NOTICE, LICENSE and CONTRIBUTORS.md. The fork does not own the upstream opentfraw registry identity or website.
+
+Private-branch qualification also uses publicly distributed ProteoWizard RAW and reference mzML fixtures at the revision recorded in REVIEW.md. Those files are downloaded and hash-checked during tests, not redistributed in the Rust package.
+
 ## Prior art
 
 ### unfinnigan

@@ -19,9 +19,6 @@ labels: bug
 
 <!-- Minimal command or code that reproduces the issue -->
 
-## Vendor software note
+## Reference evidence
 
-If you found this by comparing against vendor software or a vendor SDK,
-describe the symptom only - what's wrong, and on what input. Do not paste
-vendor tool output, vendor source, or exact values you learned by running
-vendor software. See CONTRIBUTING.md for why.
+Describe how the expected result was established and link public reference data when available. Do not paste proprietary vendor source, SDK headers or confidential instrument data. Publicly distributed reference outputs are distinguished from original binary analysis in CONTRIBUTING.md and REVIEW.md.

@@ -1,17 +1,28 @@
-# OpenTFRaw private reader
+# opentfraw-reader
 
-Native Rust Thermo RAW reading without .NET or vendor DLLs. This private branch preserves the upstream Apache-2.0 history and adds qualified v66 decoding, scientific metadata corrections and strict extraction. The private release is `1.6.1-private.1`.
+Native Rust Thermo RAW reading without .NET or vendor DLLs. This independently maintained fork of [OpenTFRaw](https://github.com/Sigilweaver/OpenTFRaw) preserves upstream Apache-2.0 history and adds qualified v66 decoding, scientific metadata corrections and strict extraction. The launch candidate is `opentfraw-reader 0.1.0-rc.1`.
 
-Install through an authenticated Git checkout, pinned to a reviewed commit or private release tag. The crate name remains `opentfraw`. Public crates.io and PyPI packages belong to upstream and do not include these changes.
+This is publication preparation only. The repository remains private, no public crate has been published, and the manifests block registry publishing. The distinct crate name `opentfraw-reader` was unregistered when checked on 2026-09-26. That check does not reserve the name.
+
+For current use, pin an authenticated Git dependency to a reviewed full commit. Use the Cargo dependency alias `opentfraw` to preserve existing Rust imports:
 
 ```toml
 [dependencies]
-opentfraw = { git = "https://github.com/pgarrett-scripps/opentfraw", tag = "v1.6.1-private.1" }
+opentfraw = { package = "opentfraw-reader", git = "https://github.com/pgarrett-scripps/opentfraw", rev = "FULL_REVIEWED_COMMIT" }
 ```
+
+After an explicitly authorized public release, the planned registry dependency is:
+
+```toml
+[dependencies]
+opentfraw = { package = "opentfraw-reader", version = "=0.1.0-rc.1" }
+```
+
+The registry example is not available yet. The upstream `opentfraw` package is a separate project. No fork docs.rs page or hosted documentation site is claimed to exist. Generate API documentation locally with `cargo doc --locked -p opentfraw-reader --no-deps --open`.
 
 ## Reading and exporting
 
-Open with `RawFileReader::open_path`. Use `try_extract_spectrum` for one zero-based scan index or `try_iter_spectra` for a stream of `Result<SpectrumRecord>` values. Both propagate unreadable arrays and validate emitted peak values. Empty valid spectra remain valid. The low-level `read_scan_peaks` API remains available.
+Open with `RawFileReader::open_path`. Use `try_extract_spectrum` for one zero-based scan index or `try_iter_spectra` for a stream of `Result<SpectrumRecord>` values. Both propagate unreadable arrays and validate emitted peak values. Empty valid spectra remain valid. The low-level `read_scan_peaks` API remains available. Run the checked streaming example with `cargo run --locked -p opentfraw-reader --example strict_read -- acquisition.raw`.
 
 `scan_metadata` reads metadata without reading peaks. Precursor targets and selected monoisotopic masses remain separate. Centroid arrays report centroid mode even when their source acquisition was profile mode. Profile extraction requires a supported calibration shape, or explicitly identified ion-trap m/z coordinates.
 
@@ -36,13 +47,13 @@ See [REVIEW.md](REVIEW.md) for evidence and remaining limits. Original upstream 
 
 ```sh
 cargo fmt --all --check
-cargo clippy --locked -p opentfraw --all-targets -- -D warnings
-cargo test --locked -p opentfraw
+cargo clippy --locked -p opentfraw-reader --all-targets -- -D warnings
+cargo test --locked -p opentfraw-reader
 python3 scripts/fetch_public_fixtures.py
-THERMO_PUBLIC_CORPUS=corpus/public cargo test --locked -p opentfraw --test public_fixtures -- --ignored
-cargo package --locked -p opentfraw
+THERMO_PUBLIC_CORPUS=corpus/public cargo test --locked -p opentfraw-reader --test public_fixtures -- --ignored
+cargo package --locked -p opentfraw-reader
 ```
 
-CI runs native checks, public fixture regressions, Python binding compilation and package verification on Linux, macOS and Windows. Rust 1.85 is checked separately. The optional upstream Python binding workspace member is retained but Python wheels are not distributed by this private release.
+CI runs native checks, public fixture regressions, Python binding compilation and package verification on Linux, macOS and Windows. Rust 1.85 is checked separately. The optional Python binding retains the import `opentfraw` and uses a private candidate distribution identity `opentfraw-reader`. Python wheels are not published or included in this launch scope.
 
-Private large acquisitions are never committed. The local regression additionally exercises the documented 5,445-scan acquisition. See [RELEASING.md](RELEASING.md) for private artifact distribution.
+Private large acquisitions are never committed. The local regression additionally exercises the documented 5,445-scan acquisition. See [RELEASING.md](RELEASING.md) for safe registry preflight and the later launch gate.

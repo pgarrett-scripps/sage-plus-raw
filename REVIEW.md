@@ -1,5 +1,7 @@
 # Thermo reader review and qualification
 
+Public-launch preparation renames the package to `opentfraw-reader 0.1.0-rc.1` while retaining the Rust library name `opentfraw`. No public release has occurred. The qualification below was completed for the preceding private release and remains the supported scope.
+
 Reviewed upstream OpenTFRaw 1.6.0 at `e300d34`, the private initial implementation at `5602402`, and consumer usage in MSConvert RS. The private release is `1.6.1-private.1`. This is a scoped parser and scientific metadata qualification, not a claim that every RAW revision has been validated.
 
 ## Fixed findings
@@ -42,7 +44,7 @@ Local large-fixture invocation:
 ```sh
 THERMO_LARGE_RAW=/path/to/large-vendor.raw \
 THERMO_PUBLIC_CORPUS=/path/to/pwiz-thermo \
-cargo test --locked -p opentfraw --test local_metadata -- --ignored
+cargo test --locked -p opentfraw-reader --test local_metadata -- --ignored
 ```
 
 ## Remaining limits

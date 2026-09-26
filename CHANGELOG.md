@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.1] - Unpublished launch candidate
+
+- Prepared a distinct `opentfraw-reader` registry identity while retaining the `opentfraw` Rust library name and import alias.
+- Added packaged license, attribution, support scope, API documentation and a strict streaming example.
+- Added disposable registry dry-run checks while keeping real publishing guards enabled.
+- Replaced inherited upstream publishing identities and removed the inherited website deployment configuration.
+- Preserved existing private release tags and qualification evidence.
+
 ## [1.6.1-private.1] - 2026-09-26
 
 - Qualified mixed v66 event records and preserved all four MSX reactions.

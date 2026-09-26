@@ -3,9 +3,8 @@ import type { Config } from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
-  title: 'OpenTFRaw',
+  title: 'opentfraw-reader reference',
   tagline: 'Rust and Python reader for Thermo Fisher RAW mass spectrometry files',
-  favicon: 'img/favicon.ico',
 
   markdown: {
     mermaid: true,
@@ -16,11 +15,11 @@ const config: Config = {
   plugins: ['docusaurus-plugin-llms-txt'],
   themes: ['@docusaurus/theme-mermaid'],
 
-  url: 'https://sigilweaver.app',
-  baseUrl: '/opentfraw/docs/',
+  url: 'http://localhost:25812',
+  baseUrl: '/',
 
-  organizationName: 'Sigilweaver',
-  projectName: 'OpenTFRaw',
+  organizationName: 'pgarrett-scripps',
+  projectName: 'opentfraw',
 
   onBrokenLinks: 'throw',
 
@@ -36,7 +35,7 @@ const config: Config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://github.com/Sigilweaver/OpenTFRaw/tree/main/docs/',
+          editUrl: 'https://github.com/pgarrett-scripps/opentfraw/tree/main/docs/',
         },
         blog: false,
         sitemap: {
@@ -61,58 +60,21 @@ const config: Config = {
       disableSwitch: false,
       respectPrefersColorScheme: true,
     },
+    announcementBar: {
+      id: 'archived-reference',
+      content: 'Inherited format reference. See the repository README and REVIEW.md for qualified fork behavior. This documentation is served locally only.',
+      isCloseable: false,
+    },
     navbar: {
-      title: 'Sigilweaver',
-      logo: {
-        alt: 'Sigilweaver logo',
-        src: 'img/logo.svg',
-        href: 'https://sigilweaver.app',
-        target: '_self',
-      },
+      title: 'opentfraw-reader reference',
       items: [
-        {
-          type: 'dropdown',
-          label: 'OpenTFRaw',
-          position: 'left',
-          items: [
-            { label: 'OpenMassSpec', href: 'https://sigilweaver.app/openmassspec/docs/' },
-            { label: 'OpenTimsTDF (Bruker)', href: 'https://sigilweaver.app/opentimstdf/docs/' },
-            { label: 'OpenWRaw (Waters)', href: 'https://sigilweaver.app/openwraw/docs/' },
-          ],
-        },
-        {
-          href: 'https://docs.rs/opentfraw',
-          label: 'API (docs.rs)',
-          position: 'right',
-        },
-        {
-          href: 'https://github.com/Sigilweaver/OpenTFRaw',
-          label: 'GitHub',
-          position: 'right',
-        },
+        { href: 'https://github.com/pgarrett-scripps/opentfraw', label: 'Fork source', position: 'right' },
+        { href: 'https://github.com/Sigilweaver/OpenTFRaw', label: 'Upstream source', position: 'right' },
       ],
     },
     footer: {
       style: 'dark',
-      links: [
-        {
-          title: 'Project',
-          items: [
-            { label: 'GitHub', href: 'https://github.com/Sigilweaver/OpenTFRaw' },
-            { label: 'Issues', href: 'https://github.com/Sigilweaver/OpenTFRaw/issues' },
-            { label: 'crates.io', href: 'https://crates.io/crates/opentfraw' },
-            { label: 'docs.rs', href: 'https://docs.rs/opentfraw' },
-          ],
-        },
-        {
-          title: 'Legal',
-          items: [
-            { label: 'Terms of Use', href: 'https://sigilweaver.app/terms' },
-            { label: 'Privacy Policy', href: 'https://sigilweaver.app/privacy' },
-          ],
-        },
-      ],
-      copyright: `Copyright ${new Date().getFullYear()} Sigilweaver Holdings LLC. OpenTFRaw is Apache-2.0 licensed. Documentation licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">CC-BY-SA 4.0</a>.`,
+      copyright: 'Original OpenTFRaw material copyright 2026 Sigilweaver Holdings LLC. Fork changes by opentfraw-reader contributors. Code Apache-2.0. Inherited documentation retains CC-BY-SA 4.0 attribution.',
     },
     prism: {
       theme: prismThemes.github,

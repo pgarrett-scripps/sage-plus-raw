@@ -16,6 +16,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 
 [dependencies.opentfraw]
+package = "opentfraw-reader"
 path = ".."
 
 [[bin]]

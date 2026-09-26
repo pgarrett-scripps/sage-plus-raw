@@ -18,17 +18,30 @@ jobs:
         with:
           python-version: '3.12'
       - run: cargo fmt --all --check
-      - run: cargo clippy --locked -p opentfraw --all-targets -- -D warnings
-      - run: cargo test --locked -p opentfraw
+      - run: cargo clippy --locked -p opentfraw-reader --all-targets -- -D warnings
+      - run: cargo test --locked -p opentfraw-reader
       - run: python scripts/fetch_public_fixtures.py
-      - run: cargo test --locked -p opentfraw --test public_fixtures -- --ignored
+      - run: cargo test --locked -p opentfraw-reader --test public_fixtures -- --ignored
         env:
           THERMO_PUBLIC_CORPUS: corpus/public
       - run: cargo check --locked -p opentfraw-py
-      - run: cargo package --locked -p opentfraw
+      - run: cargo doc --locked -p opentfraw-reader --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: python scripts/check_package_docs.py
+      - run: cargo package --locked -p opentfraw-reader
   msrv:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85.0
-      - run: cargo check --locked -p opentfraw
+      - run: cargo check --locked -p opentfraw-reader
+  registry-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/registry_preflight.py

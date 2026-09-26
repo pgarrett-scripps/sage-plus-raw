@@ -1,3 +1,29 @@
+//! Native Thermo RAW reading with strict spectrum extraction.
+//!
+//! Cargo package: `opentfraw-reader`. Rust library name: `opentfraw`.
+//! This is an independent OpenTFRaw fork. The launch candidate is not yet
+//! published to crates.io. See the packaged README and REVIEW for support scope.
+//!
+//! ```no_run
+//! use opentfraw::{try_iter_spectra, RawFileReader};
+//! use std::{fs::File, io::BufReader};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let raw = RawFileReader::open_path("acquisition.raw")?;
+//! let mut source = BufReader::new(File::open("acquisition.raw")?);
+//! for spectrum in try_iter_spectra(&raw, &mut source, false) {
+//!     let spectrum = spectrum?;
+//!     println!("scan {}: {} peaks", spectrum.scan_number, spectrum.mz.len());
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Strict extraction propagates unreadable arrays. Unknown scientific metadata
+//! remains unknown. Convenience mzML export rejects unsupported precursor modes
+//! and unqualified activation. Discard partial output if a writer returns an error.
+//! The legacy extraction helpers discard errors and exist only for compatibility.
+
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 mod error;
 mod qualified_events;
