@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "opentfraw-py"
 description = "Python bindings for the OpenTFRaw library."
 readme = "../../README.md"

@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "opentfraw"
 description = "Rust parser for Thermo Fisher RAW mass spectrometry files."
 readme = "../../README.md"
