@@ -19,4 +19,7 @@ Source: https://github.com/prvst/unfinnigan
 
 ## Rust dependencies
 
+- [roxmltree](https://github.com/RazrFalcon/roxmltree) -- read-only parsing of
+  embedded method XML (Yevhenii Reizner, MIT/Apache-2.0).
+
 - [thiserror](https://github.com/dtolnay/thiserror) -- derive macro for Error impls (David Tolnay, MIT/Apache-2.0)

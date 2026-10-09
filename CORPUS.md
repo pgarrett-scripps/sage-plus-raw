@@ -150,39 +150,88 @@ The selection heuristic - `ntrailer > 0` (v64+) or `nsegs > 0 && first_scan
 
 ## Open Issues
 
-### DIA isolation window m/z (Orbitrap Exploris 480 and similar)
+### Source-CID method fallback (issue #57)
 
-For the Exploris 480 DIA files in corpus (PXD035500), the isolation window
-center m/z is currently absent from filter strings.  Investigation findings:
+The public GlycoPOST acquisition
+[`GPST000122.0/NGlycans_Serum_Fetuin_File1.raw`](https://glycopost.glycosmos.org/data/GPST000122.0/NGlycans_Serum_Fetuin_File1.raw)
+provides an additional original-byte regression for a Q Exactive Plus in
+negative NSI. The [study entry](https://glycopost.glycosmos.org/entry/GPST000122)
+is linked by the [research publication](https://doi.org/10.1038/s41467-023-37365-4).
 
-- **Scan event body format**: DIA MS2 scan events use a uniform 136-byte body
-  (event size = 272 bytes total).  The body[8..12] f32 field holds a value in
-  the range ~3.8-5.0, which is in instrument frequency space, not m/z.  There
-  is no reaction structure (np = 0 at body[4..8]) and no m/z at any body offset.
+- Size: 28,102,388 bytes.
+- SHA-256: `ea19fe225a38e370f63dcdc7bba4d551706d61f06ec98dc2edc6b8334d7ab819`.
+- All 6,674 scan trailers lack a source-CID energy. Two explicitly linked
+  embedded method XML scan events each declare 70 eV.
+- All 419 MS1 and 6,255 MS2 scans resolve `instrument_method` provenance and
+  render `sid=70.00`. Rust extras, Python streamed scans and canonical records
+  are checked by the public-fixture tests.
 
-- **Scan params**: The file has 1004 bytes/scan of scan params data starting at
-  `scan_params_addr`, but the GenericDataHeader (GDH) that describes the record
-  schema was not found anywhere in the 8 MB window between the error log and
-  scan_trailer that `find_forward` searches.  As a result `scan_parameters` is
-  empty for all scans in this file and `ScanParams` accessors return `None`.
+Run the ignored Rust regression and the optional Python regression with
+`OPENTFRAW_SOURCE_CID_PLUS_RAW` pointing to this acquisition. The fixture stays
+outside the repository; no acquisition bytes or converted vendor output are
+committed. This file verifies the reported instrument family, negative
+polarity and missing-trailer fallback, but does not reproduce the original
+single-SIM 20 eV acquisition. Do not treat that remaining case as verified.
 
-- **What is needed**: Locate the GDH for Exploris 480 scan params (it may be
-  outside the current search window, or use a different header format).  Once
-  the schema is found, the calibration coefficients (conversion parameters A, B,
-  C) inside the scan params record can be used to convert frequency to m/z and
-  recover the isolation window center.
+### DIA isolation-window centers (issue #44)
 
-- **Workaround**: For instruments where the GDH is found correctly (Q Exactive,
-  Fusion Lumos, Eclipse), `ScanParams::isolation_width_mz()` and the
-  `monoisotopic_mz()` family already work.  Eclipse DIA files (PXD038440, once
-  downloaded) will clarify whether tribrid instruments store the isolation m/z
-  in the reaction structure (np > 0) as DDA scans do, bypassing the calibration
-  problem entirely.
+A 2026-09-29 investigation of public PXD035500 Exploris 480 files
+`RN_SGLab_210301_DN_vDIA_01.raw` and
+`RN_SGLab_210301_DN_vDIA_15.raw`, and PXD031322 Fusion Lumos file
+`OFL001513-YLL-GPF-15K-1.raw`, corrected the earlier interpretation:
+
+- The isolation center is an f64 at scan-event body offset 4, not a
+  frequency value. Reading only its high four bytes at body[8..12] as f32
+  produced the misleading values near 3.8-5.0. No frequency-to-m/z
+  conversion is needed for these centers. The existing offset-4 reaction
+  decoder recovers the Exploris centers.
+- Matching scan-parameter schemas are present close to the error log in
+  both Exploris files (332 and 1196 bytes from `error_log_addr`, respectively).
+  Each describes a 1004-byte record. The current 4 MiB forward-search cap
+  does not block recovery on these files. The Lumos schema describes a
+  567-byte record and is also recovered by the existing search.
+- The Lumos DIA file uses 232-byte primary events and 288-byte MS2 events,
+  rather than the 232/344-byte family used by other tribrid workflows.
+  Both size equations can fit its total event-stream length. The reader
+  now validates every preamble and the exact stream end before selecting
+  a known variable layout.
+- Decoding the complete Lumos event metadata yields 2308 MS1 and 150020
+  MS2 events, with an isolation center on every MS2. The first centers
+  (351.4096, 353.4105, 355.4114) agree with the file's embedded method table.
+
+Evidence came from bounded HTTP byte ranges of the public RAW files,
+without vendor software or vendor-generated output. Full-spectrum export
+and whole-file decoding still require a complete target fixture.
 
 ### Acquisition modes not yet in corpus
 
 | Mode | Notes |
 | ---- | ----- |
-| Eclipse DIA | DIA on tribrid Orbitrap: needed to confirm whether tribrid instruments store isolation m/z in reaction structure (np>0) as DDA scans do. No confirmed Eclipse DIA PRIDE accession with accessible RAW files identified yet. The existing Fusion Lumos DIA files (PXD031322) show the same filter gap as Exploris 480, suggesting the isolation m/z is absent in the tribrid scan event body for DIA as well. |
+| Eclipse DIA | DIA on tribrid Orbitrap: needed to confirm whether tribrid instruments store isolation m/z in reaction structure (np>0) as DDA scans do. No confirmed Eclipse DIA PRIDE accession with accessible RAW files identified yet. Fusion Lumos DIA files (PXD031322) carry direct isolation centers at body offset 4; Eclipse DIA remains unverified. |
 | SPS-MS3 (TMT) | Synchronous precursor selection MS3 for isobaric quantification; differs from standard MS3 in the number of simultaneous precursor m/z in the scan event body. |
 | ECD / IRMPD | Both enum variants implemented; no corpus files yet. |
+
+## Lock-mass count controls (#58)
+
+These intentionally published original acquisitions are used by the opt-in
+`public_lock_mass_counts_and_inherited_correction` test. Files remain outside
+version control; the test takes local paths through the variables below.
+
+| Variable | Public acquisition | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| `OPENTFRAW_LOCK_MASS_PLUS_RAW` | [MTBLS5657/20200612_01_Neg_DOPAEx2_ZH04.RAW](https://ftp.ebi.ac.uk/pub/databases/metabolights/studies/public/MTBLS5657/FILES/RAW_FILES/NEG/20200612_01_Neg_DOPAEx2_ZH04.RAW) | 5902616 | `83b38b0523361a6babcc21bcb2c112250aecd3a3a56fce5ab7f7b3f56a36bf42` |
+| `OPENTFRAW_LOCK_MASS_HFX_RAW` | [PXD071477/RS_300825_3.raw](https://ftp.pride.ebi.ac.uk/pride/data/archive/2026/03/PXD071477/RS_300825_3.raw) | 210873724 | `853a4291744a1ec93636073483ecc38fd67862a0e6baa8d2e9bde8eb121c2270` |
+| `OPENTFRAW_LOCK_MASS_EXPLORIS_RAW` | [PXD064947/X6212FD_2.raw](https://ftp.pride.ebi.ac.uk/pride/data/archive/2026/04/PXD064947/X6212FD_2.raw) | 655224569 | `7d686792c803e347bad482a733cab93012c75bbefe630dfd8672b06076d656a5` |
+
+MTBLS5657 contains 138 negative-mode Q Exactive Plus scans, each configured
+for nine lock masses and reporting one match with a nonzero correction.
+Its [study announcement](https://ftp.ebi.ac.uk/pub/databases/metabolights/studies/public/MTBLS5657/MTBLS5657.announcement.json)
+specifies EMBL-EBI Terms of Use. The two PRIDE project records specify CC0.
+
+PXD071477 has 27832 Q Exactive HF-X scans, of which 3559 report a match and
+24273 report zero matches. PXD064947 has 51254 Exploris 480 scans, of which
+16033 report a match and 35221 report zero matches. In both files every
+zero-match scan retains the latest matched scan's nonzero correction; their
+MS1 event also contains both matched and zero-match scans. These are count
+and correction controls, not proof of the exact `lock` filter-token meaning.
+No vendor software, SDK, or vendor output was used to validate them.

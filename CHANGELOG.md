@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The isolation target no longer reads "MS2 Isolation Offset"; it has its own accessor.
 - Invalid single peaks are dropped and counted in `dropped_peaks` instead of failing the scan.
 - Removed mzML export, the openmassspec-core dependency, the Python bindings, the documentation site and the deprecated `extract_spectrum` and `iter_spectra`.
+- Merged upstream OpenTFRaw 3.0.0 (profile calibration in 96-byte events, lock-mass counts, Lumos DIA boundaries, source CID).
 
 ## [0.1.0-rc.2] - Unpublished candidate
 
@@ -43,6 +44,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed invented SRM polarity, isolation width, reaction energy units and dangling precursor references.
 - Added pinned, hash-verified public acquisition regressions to Linux, macOS and Windows CI, plus minimum Rust version and package verification.
 - Retained legacy lossy extraction APIs for source compatibility and documented their limits.
+
+## [3.0.0] - 2026-10-04
+
+### Changed
+
+- **Breaking (Rust):** `RawFileReader` gains the public
+  `source_cid_by_method_event` map. Code that constructs this reader with a
+  struct literal must initialize the new field; exhaustive destructuring must
+  bind it or use `..`. Readers opened through `open_path` or `open` need no
+  caller changes. Python users keep the existing API.
+
+### Added
+
+- Separate matched and configured lock-mass counts in Rust accessors, Python
+  extras, canonical spectrum records, and mzML userParams, including status-log
+  variants. Missing matched counts stay absent rather than becoming the
+  configured count. The existing combined accessor and extra key retain their
+  compatibility fallback; `scan_filter()` still leaves the unproven `lock`
+  token unset. (#58)
+
+### Fixed
+
+- Orbitrap MS1 profiles in 96-byte event bodies now use the calibration
+  coefficients after the acquisition window. This fixes frequency values
+  returned as m/z on Fusion Lumos, Eclipse and Orbitrap Elite files; centroid
+  spectra were unaffected.
+- Fusion Lumos DIA scan events now validate the 232/288-byte layout before
+  choosing a variable-length event family. This keeps isolation windows aligned
+  across the complete PXD031322 event stream and preserves existing 232/344
+  and uniform event layouts. (#44)
+- Source CID energy now appears as `sid=<energy>` in scan filters when a
+  positive per-scan trailer value or an explicitly linked method XML scan event
+  supplies it. Source energy and its provenance also reach Python and mzML
+  extra fields. Unknown source-on flags remain unset; method settings are
+  never broadcast across unrelated scan events.
+
+### Validation
+
+- Verify trailer-free source-CID recovery on all 6,674 scans of a public
+  negative-polarity Q Exactive Plus acquisition (GlycoPOST GPST000122).
+  The embedded method supplies 70 eV for its MS1 and MS2 events. The original
+  single-SIM 20 eV report remains unverified. (#57)
+
+## [2.0.0] - 2026-09-28
+
+### Added
+
+- Python can stream complete canonical spectrum records and read canonical
+  run metadata and chromatograms. Run extras preserve decoded sample,
+  injection, workstation, and method fields.
+
+### Changed
+
+- **Breaking (Rust):** adopts `openmassspec-core` 2.0.0 (arrow 60). Python
+  users are unaffected.
+
+### Fixed
+
+- `instrument_model` is now detected for files written without an embedded
+  instrument method. When the pre-scan-data window names no model, the
+  model strings of the InstID block that follows the MS RunHeader are
+  matched against the registry instead. Files that already detected a model
+  are unchanged. Layout confirmed on v57, v64, and v66 files. (#59)
 
 ## [1.6.0] - 2026-09-24
 

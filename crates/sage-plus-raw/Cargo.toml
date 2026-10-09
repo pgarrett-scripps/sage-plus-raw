@@ -25,5 +25,6 @@ unsafe_code = "forbid"
 
 [dependencies]
 thiserror = "2"
+roxmltree = "0.21"
 
 [dev-dependencies]

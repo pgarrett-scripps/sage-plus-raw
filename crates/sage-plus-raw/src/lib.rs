@@ -26,6 +26,7 @@
 mod binary_reader;
 mod error;
 mod event_stream;
+mod instrument_method;
 mod metadata;
 mod reader;
 mod spectrum;

@@ -68,9 +68,13 @@ pub fn build_filter(
         activation_energy,
         supplemental_energy,
         None,
+        None,
     )
 }
 
+/// Build a filter with a qualified activation and an explicitly sourced
+/// source-CID energy. Zero does not establish that source CID is off, so it
+/// is omitted rather than rendered as `!sid`.
 pub(crate) fn build_filter_with_activation(
     event: &ScanEvent,
     index_entry: &ScanIndexEntry,
@@ -78,6 +82,7 @@ pub(crate) fn build_filter_with_activation(
     activation_energy: Option<f64>,
     _supplemental_energy: Option<f64>,
     activation: Option<Activation>,
+    source_cid_energy_ev: Option<f64>,
 ) -> String {
     let mut out = String::with_capacity(96);
     let p = &event.preamble;
@@ -109,6 +114,11 @@ pub(crate) fn build_filter_with_activation(
     if let Some(ion) = p.ionization() {
         out.push_str(ion.as_str());
         out.push(' ');
+    }
+
+    // Source CID follows the ionization tokens in the public filter grammar.
+    if let Some(energy) = source_cid_energy_ev.filter(|e| e.is_finite() && *e > 0.0) {
+        out.push_str(&format!("sid={energy:.2} "));
     }
 
     // Dependent-scan flag
@@ -231,6 +241,33 @@ mod tests {
             low_mz: low,
             high_mz: high,
             offset: 0,
+        }
+    }
+
+    #[test]
+    fn source_cid_token_placement_and_unknown_values() {
+        let ev = ScanEvent {
+            preamble: make_preamble(0, 1, 1, 2),
+            reactions: vec![],
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        };
+        let idx = make_index(100.0, 200.0);
+        assert_eq!(
+            build_filter_with_activation(&ev, &idx, None, None, None, None, Some(20.0)),
+            "FTMS - p NSI sid=20.00 SIM ms [100.0000-200.0000]"
+        );
+        for energy in [
+            None,
+            Some(0.0),
+            Some(-1.0),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+        ] {
+            assert_eq!(
+                build_filter_with_activation(&ev, &idx, None, None, None, None, energy),
+                build_filter(&ev, &idx, None, None, None)
+            );
         }
     }
 
