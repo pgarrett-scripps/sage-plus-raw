@@ -79,12 +79,13 @@ impl<'a> ScanParams<'a> {
         self.0.get_i32("Micro Scan Count:")
     }
 
-    /// Scan number of the master (MS1) scan that triggered this dependent scan.
-    /// Returns `None` if this is not a dependent scan.
+    /// Scan number of the scan that triggered this dependent scan, from the
+    /// `"Master Scan Number:"` trailer. Returns `None` when it is absent.
+    ///
+    /// `"Master Index:"` is deliberately not used: on Q Exactive and LTQ
+    /// Orbitrap files it is a 0/1 flag, not a scan number.
     pub fn master_scan_number(&self) -> Option<i32> {
-        self.0
-            .get_i32("Master Scan Number:")
-            .or_else(|| self.0.get_i32("Master Index:"))
+        self.0.get_i32("Master Scan Number:")
     }
 
     /// Orbitrap / FT resolving power (e.g. 60000, 120000).

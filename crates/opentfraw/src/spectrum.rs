@@ -120,6 +120,45 @@ fn precursor_masses(
     (target, selected)
 }
 
+/// How far back [`derived_master`] looks for the triggering scan.
+const MASTER_SEARCH_SCANS: u32 = 5000;
+
+fn event_level(event: &ScanEvent) -> u32 {
+    event.preamble.ms_power().map(ms_level).unwrap_or(1)
+}
+
+/// The scan that triggered the level-`level` scan at index `idx` when the
+/// trailer names none: the nearest earlier scan one level lower. An MSn
+/// scan (n > 2) prefers the nearest MS(n-1) scan of the same cycle whose
+/// first reaction isolated the same precursor.
+fn derived_master(events: &[ScanEvent], first_scan: u32, idx: u32, level: u32) -> Option<u32> {
+    let parent_level = level.checked_sub(1).filter(|&l| l > 0)?;
+    let target = (parent_level > 1)
+        .then(|| events.get(idx as usize)?.reactions.first())
+        .flatten()
+        .map(|r| r.precursor_mz);
+    let mut nearest = None;
+    for j in (idx.saturating_sub(MASTER_SEARCH_SCANS)..idx).rev() {
+        let event = events.get(j as usize)?;
+        let found = event_level(event);
+        if found == parent_level {
+            let matches = target.is_none_or(|mz| {
+                event
+                    .reactions
+                    .first()
+                    .is_some_and(|r| (r.precursor_mz - mz).abs() <= 0.01)
+            });
+            if matches {
+                return first_scan.checked_add(j);
+            }
+            nearest = nearest.or(first_scan.checked_add(j));
+        } else if found < parent_level {
+            break;
+        }
+    }
+    nearest
+}
+
 /// Extract the metadata of the scan at scan-index `idx` (zero-based offset
 /// from the first scan), without reading its peak arrays.
 ///
@@ -215,7 +254,8 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
                 .and_then(|p| p.master_scan_number())
                 .filter(|&n| n > 0)
                 .map(|n| n as u32)
-                .filter(|&n| n >= first_scan && n < scan_number);
+                .filter(|&n| n >= first_scan && n < scan_number)
+                .or_else(|| derived_master(&raw.scan_events, first_scan, idx, level));
             PrecursorInfo {
                 target_mz: tm,
                 selected_mz: sm,
@@ -566,6 +606,50 @@ mod tests {
             Some(crate::Analyzer::FTMS)
         )
         .is_err());
+    }
+
+    fn event(level: u8, mz: Option<f64>) -> ScanEvent {
+        let mut bytes = vec![0u8; 136];
+        bytes[6] = level;
+        ScanEvent {
+            preamble: crate::scan_event::ScanEventPreamble { bytes },
+            reactions: mz
+                .into_iter()
+                .map(|precursor_mz| crate::scan_event::Reaction {
+                    precursor_mz,
+                    unknown_double: 0.0,
+                    energy: 0.0,
+                    unknown_long1: 0,
+                    unknown_long2: 0,
+                })
+                .collect(),
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        }
+    }
+
+    #[test]
+    fn derived_master_follows_the_cycle() {
+        // MS1, MS2 500, MS2 600, MS3 of 500, MS3 of 600, MS1, MS2 700
+        let events = [
+            event(1, None),
+            event(2, Some(500.0)),
+            event(2, Some(600.0)),
+            event(3, Some(500.0)),
+            event(3, Some(600.0)),
+            event(1, None),
+            event(2, Some(700.0)),
+            event(3, Some(900.0)),
+        ];
+        let master = |idx| derived_master(&events, 10, idx, event_level(&events[idx as usize]));
+        assert_eq!(master(0), None);
+        assert_eq!(master(1), Some(10));
+        assert_eq!(master(2), Some(10));
+        assert_eq!(master(3), Some(11));
+        assert_eq!(master(4), Some(12));
+        assert_eq!(master(6), Some(15));
+        // No same-precursor MS2 in the cycle: the nearest one.
+        assert_eq!(master(7), Some(16));
     }
 
     #[test]
