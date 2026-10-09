@@ -230,11 +230,24 @@ impl RawFileReader {
         } else {
             r.read_u32()?
         };
-        let scan_events = if let Some(events) =
-            crate::qualified_events::read(&mut r, version, n_events, run_header.scan_params_addr)?
-        {
+        let events_start = r.position();
+        let stream_len = run_header
+            .scan_params_addr
+            .checked_sub(events_start)
+            .filter(|&len| len > 0 && r.check_count(len, 1).is_ok());
+        let decoded = match stream_len {
+            Some(len) => {
+                let stream = r.read_bytes(len as usize)?;
+                crate::event_stream::decode(&stream, version, n_events)
+            }
+            None => None,
+        };
+        let scan_events = if let Some(events) = decoded {
             events
         } else {
+            // Legacy fixed-size heuristics, kept for streams the
+            // self-describing decoder cannot account for byte for byte.
+            r.seek_to(events_start)?;
             // For v66, compute per-event body sizes from the stream's address range.
             // The scan event stream spans [scan_trailer_addr+4 .. scan_params_addr).
             // Each event = preamble (136 bytes) + body.
@@ -286,10 +299,12 @@ impl RawFileReader {
                                 (DEPENDENT_EVENT as usize).saturating_sub(preamble_size),
                             )
                         } else {
-                            return Err(Error::UnsupportedLayout("variable event layout"));
+                            let body = ((stream_bytes / n) as usize).saturating_sub(preamble_size);
+                            (body, body)
                         }
                     } else {
-                        return Err(Error::UnsupportedLayout("variable event layout"));
+                        let body = ((stream_bytes / n) as usize).saturating_sub(preamble_size);
+                        (body, body)
                     }
                 }
             } else {

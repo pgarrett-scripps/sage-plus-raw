@@ -56,5 +56,5 @@ fn local_metadata_regressions() {
     )
     .is_err());
     assert!(output.is_empty());
-    assert!(RawFileReader::open_path(corpus.join("source_cid_test_3scans.raw")).is_err());
+    assert!(RawFileReader::open_path(corpus.join("source_cid_test_3scans.raw")).is_ok());
 }

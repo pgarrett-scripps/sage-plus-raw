@@ -208,8 +208,18 @@ fn multiple_reactions_and_offset_isolation_are_preserved() {
         .unwrap();
     assert!((precursor.target_mz.unwrap() - 379.7113342285156).abs() < 1e-9);
     assert!((precursor.selected_mz.unwrap() - 384.7153374006682).abs() < 1e-9);
-    for name in ["IT-HCD-SPS.raw", "source_cid_test_3scans.raw"] {
-        assert!(RawFileReader::open_path(fixture(name)).is_err());
+    // Variable-length event streams open and decode every event in step.
+    for (name, levels) in [
+        ("IT-HCD-SPS.raw", &[3u8][..]),
+        ("source_cid_test_3scans.raw", &[2, 2, 2][..]),
+    ] {
+        let raw = RawFileReader::open_path(fixture(name)).unwrap();
+        let decoded: Vec<u8> = raw
+            .scan_events
+            .iter()
+            .map(|event| event.preamble.bytes[6])
+            .collect();
+        assert_eq!(decoded, levels, "{name}");
     }
 }
 

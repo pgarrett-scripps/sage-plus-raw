@@ -27,8 +27,8 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 mod binary_reader;
 mod error;
+mod event_stream;
 mod metadata;
-mod qualified_events;
 mod reader;
 mod spectrum;
 mod types;
