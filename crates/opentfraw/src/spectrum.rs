@@ -127,8 +127,9 @@ fn precursor_masses(
 /// index, scan event and trailer. [`extract_spectrum`], the mzML writer, the
 /// `openmassspec_core` adapter and the Python bindings all build on it, so a
 /// field wired here reaches every output. Returns `None` if `idx` is out of
-/// range. Multiplexed reactions remain available in `raw.scan_events`.
-/// The singular precursor field is unavailable for these scans.
+/// range. Every scan above MS1 has a precursor. For multiplexed (MSX) and
+/// multi-stage (EThcD, SPS-MS3) events it describes the first reaction, and
+/// every reaction remains available in `raw.scan_events`.
 pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
     if idx >= raw.num_scans {
         return None;
@@ -173,7 +174,7 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
         None
     };
 
-    let precursor = if level == 2 && event.is_none_or(|e| e.reactions.len() <= 1) {
+    let precursor = if level > 1 {
         let info = if let Some(q1) = srm_q1 {
             PrecursorInfo {
                 target_mz: Some(q1),

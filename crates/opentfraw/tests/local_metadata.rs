@@ -42,10 +42,12 @@ fn local_metadata_regressions() {
         assert!((r.precursor_mz - mz).abs() < 1e-9);
         assert_eq!(r.unknown_double, 5.0);
     }
-    assert!(opentfraw::scan_metadata(&raw, 0)
+    // The precursor describes the first multiplexed reaction.
+    let precursor = opentfraw::scan_metadata(&raw, 0)
         .unwrap()
         .precursor
-        .is_none());
+        .unwrap();
+    assert!((precursor.target_mz.unwrap() - expected[0]).abs() < 1e-9);
     let mut output = Vec::new();
     assert!(opentfraw::write_mzml(
         &raw,

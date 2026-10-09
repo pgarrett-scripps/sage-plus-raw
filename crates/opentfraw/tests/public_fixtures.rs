@@ -130,7 +130,7 @@ fn unknown_activation_and_complex_precursors_cannot_be_exported_lossily() {
     assert!(opentfraw::scan_metadata(&raw, 0)
         .unwrap()
         .precursor
-        .is_none());
+        .is_some());
     assert!(opentfraw::write_indexed_mzml(
         &raw,
         &mut File::open(&path).unwrap(),
@@ -186,10 +186,12 @@ fn multiple_reactions_and_offset_isolation_are_preserved() {
         assert!((reaction.precursor_mz - expected).abs() < 1e-9);
         assert_eq!(reaction.unknown_double, 5.0);
     }
-    assert!(opentfraw::scan_metadata(&raw, 0)
+    // The precursor describes the first multiplexed reaction.
+    let precursor = opentfraw::scan_metadata(&raw, 0)
         .unwrap()
         .precursor
-        .is_none());
+        .unwrap();
+    assert!((precursor.target_mz.unwrap() - expected[0]).abs() < 1e-9);
     let mut output = Vec::new();
     assert!(opentfraw::write_mzml(
         &raw,
