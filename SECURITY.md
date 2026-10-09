@@ -1,6 +1,6 @@
 # Security policy
 
-This policy applies to the independent `opentfraw-reader` fork maintained in [pgarrett-scripps/opentfraw](https://github.com/pgarrett-scripps/opentfraw). It does not promise support from the upstream OpenTFRaw maintainers.
+This policy applies to the independent `sage-plus-raw` fork maintained in [pgarrett-scripps/opentfraw](https://github.com/pgarrett-scripps/opentfraw). It does not promise support from the upstream OpenTFRaw maintainers.
 
 ## Reporting
 
@@ -12,7 +12,7 @@ Include the commit or package version, operating system, Rust version, expected 
 
 ## Scope and supported versions
 
-The current launch candidate and the most recent private release are evaluated for security fixes. Earlier upstream releases are outside this fork's support commitment. No public crate release currently exists under the new package identity.
+The current launch candidate and the most recent private release are evaluated for security fixes. Earlier upstream releases are outside this fork's support commitment. No crate is published under this package identity.
 
 Relevant findings include malformed-input panics, excessive allocation, infinite loops, unintended file writes and reachable dependency vulnerabilities. Scientific decoding errors also matter, even when they do not create a security vulnerability.
 
@@ -20,4 +20,4 @@ The parser forbids unsafe Rust in its own crate. That restriction is not a guara
 
 ## Distribution
 
-The real Rust manifests retain `publish = false`. Python packaging retains a private distribution classifier. CI runs registry dry-runs only inside disposable copies. There are no registry upload, website deployment or visibility-changing workflows.
+The Rust manifests retain `publish = false`. There are no registry upload, website deployment or visibility-changing workflows.

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Renamed the package to `sage-plus-raw` (library `sage_plus_raw`) for Sage Plus.
+- Decode scan events from their self-describing layout, falling back per file to the 1.4.1 fixed-size layouts, so every file opens and MS levels stay in step on EThcD, UVPD, SPS-MS3, ion-trap and negative-mode files.
+- Every scan above MS1 has a precursor, including MSX, EThcD and SPS-MS3 scans.
+- `master_scan_number` no longer reads the 0/1 "Master Index" flag; it uses "Master Scan Number" or the scan cycle.
+- The isolation target no longer reads "MS2 Isolation Offset"; it has its own accessor.
+- Invalid single peaks are dropped and counted in `dropped_peaks` instead of failing the scan.
+- Removed mzML export, the openmassspec-core dependency, the Python bindings, the documentation site and the deprecated `extract_spectrum` and `iter_spectra`.
+
 ## [0.1.0-rc.2] - Unpublished candidate
 
 - Deprecated lossy helpers and added strict full-precision arrays for native consumers.

@@ -1,6 +1,6 @@
-# Contributing to opentfraw-reader
+# Contributing to sage-plus-raw
 
-This repository maintains an independent fork of [OpenTFRaw](https://github.com/Sigilweaver/OpenTFRaw). The planned Rust package is `opentfraw-reader`, with the Rust library name `opentfraw` retained for source compatibility. The repository remains private while launch preparation is completed.
+This repository maintains an independent fork of [OpenTFRaw](https://github.com/Sigilweaver/OpenTFRaw). The package is `sage-plus-raw` with the library name `sage_plus_raw`, maintained for Sage Plus. It is not published to crates.io.
 
 Submit focused changes against this repository. Preserve upstream attribution and describe changes to scientific output, supported acquisition modes and error behavior. Add independent regression evidence when changing a binary layout or metadata interpretation. Do not infer an activation method, calibration or acquisition classification from insufficient evidence.
 
@@ -8,16 +8,15 @@ Run the following checks from the workspace root:
 
 ```sh
 cargo fmt --all --check
-cargo clippy --locked -p opentfraw-reader --all-targets -- -D warnings
-cargo test --locked -p opentfraw-reader
-cargo doc --locked -p opentfraw-reader --no-deps
+cargo clippy --locked -p sage-plus-raw --all-targets -- -D warnings
+cargo test --locked -p sage-plus-raw
+cargo doc --locked -p sage-plus-raw --no-deps
 python3 scripts/fetch_public_fixtures.py
-THERMO_PUBLIC_CORPUS=corpus/public cargo test --locked -p opentfraw-reader --test public_fixtures -- --ignored
-python3 scripts/check_package_docs.py
-cargo package --locked -p opentfraw-reader
+python3 scripts/prepare_reference_arrays.py
+THERMO_PUBLIC_CORPUS=corpus/public cargo test --locked -p sage-plus-raw --test public_fixtures -- --ignored
 ```
 
-The native crate forbids unsafe code. Python binding changes also require `cargo check --locked -p opentfraw-py`. Use strict extraction APIs in new examples and integrations. Record user-visible changes in `CHANGELOG.md`.
+The native crate forbids unsafe code. Use strict extraction APIs in new examples and integrations. Record user-visible changes in `CHANGELOG.md`.
 
 ## Evidence and provenance
 
@@ -26,12 +25,6 @@ Do not copy proprietary vendor code, decompiled implementations, SDK headers or 
 Do not describe all historical work as clean-room work without evidence. Preserve distinctions between inherited implementation, newly analyzed binary fields and public reference outputs.
 
 Never commit private instrument acquisitions, credentials, personal data or dataset paths that identify research participants. Synthetic fixtures are preferred for malformed-input tests. Public fixtures are fetched at pinned revisions with SHA-256 verification.
-
-## Packaged documentation
-
-`LICENSE`, `NOTICE`, `ATTRIBUTION.md`, `CONTRIBUTORS.md`, `SECURITY.md`, `REVIEW.md` and `RELEASING.md` are copied into `crates/opentfraw` so the distributed archive remains self-contained. Update the corresponding copies when changing these root documents. CI verifies equality.
-
-The inherited local reference site under `docs` retains its original documentation license and is not a publishing target. Current support claims belong in README, Rust API documentation and REVIEW.
 
 ## Security and contributions
 

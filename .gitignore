@@ -33,6 +33,6 @@ __pycache__/
 .DS_Store
 
 # Generated fuzz seeds, discoveries and instrumentation
-/crates/opentfraw/fuzz/corpus/
-/crates/opentfraw/fuzz/artifacts/
-/crates/opentfraw/fuzz/target/
+/crates/sage-plus-raw/fuzz/corpus/
+/crates/sage-plus-raw/fuzz/artifacts/
+/crates/sage-plus-raw/fuzz/target/

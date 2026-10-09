@@ -1,5 +1,7 @@
 # Thermo reader review and qualification
 
+> Historical review of the opentfraw-reader rc.2 candidate. The package is now `sage-plus-raw`; mzML export and the Python bindings were removed. See README.md for current behavior.
+
 Public-launch preparation renames the package to `opentfraw-reader 0.1.0-rc.2` while retaining the Rust library name `opentfraw`. No public release has occurred. The qualification below was completed for the preceding private release and remains the supported scope.
 
 Reviewed upstream OpenTFRaw 1.6.0 at `e300d34`, the private initial implementation at `5602402`, and consumer usage in MSConvert RS. The private release is `1.6.1-private.1`. This is a scoped parser and scientific metadata qualification, not a claim that every RAW revision has been validated.

@@ -12,6 +12,6 @@ for name, expected in manifest["files"].items():
     if hashlib.sha256(data).hexdigest() != expected:
         raise ValueError(f"Fixture digest mismatch: {name}")
     for target in ["open", "read_scan_peaks", "strict_decode"]:
-        destination = root / "crates/opentfraw/fuzz/corpus" / target
+        destination = root / "crates/sage-plus-raw/fuzz/corpus" / target
         destination.mkdir(parents=True, exist_ok=True)
         (destination / name).write_bytes(data)
