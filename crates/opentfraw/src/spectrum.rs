@@ -64,6 +64,9 @@ pub struct SpectrumRecord {
     pub precursor: Option<PrecursorInfo>,
     pub mz: Vec<f64>,
     pub intensity: Vec<f32>,
+    /// Peaks dropped because their m/z was not finite and positive or their
+    /// intensity was not finite or overflowed f32.
+    pub dropped_peaks: usize,
 }
 
 /// Per-scan metadata: every field of a [`SpectrumRecord`] except the peak
@@ -325,6 +328,7 @@ pub fn try_extract_spectrum<R: Read + Seek>(
         mz,
         intensity,
         scan_mode,
+        dropped_peaks,
     } = decode_spectrum(raw, source, idx, include_profile)?;
     Ok(SpectrumRecord {
         index: meta.index,
@@ -347,6 +351,7 @@ pub fn try_extract_spectrum<R: Read + Seek>(
         precursor: meta.precursor,
         mz,
         intensity,
+        dropped_peaks,
     })
 }
 
@@ -381,6 +386,7 @@ pub(crate) struct DecodedSpectrum {
     pub(crate) mz: Vec<f64>,
     pub(crate) intensity: Vec<f32>,
     pub(crate) scan_mode: Option<crate::ScanMode>,
+    pub(crate) dropped_peaks: usize,
 }
 
 /// Strict arrays with full profile precision, before narrowing to f32 for
@@ -391,6 +397,9 @@ pub struct SpectrumArrays {
     pub mz: Vec<f64>,
     pub intensity: Vec<f64>,
     pub scan_mode: Option<crate::ScanMode>,
+    /// Peaks dropped because their m/z was not finite and positive or their
+    /// intensity was not finite or overflowed f32.
+    pub dropped_peaks: usize,
 }
 
 /// Decode validated arrays without narrowing profile intensities. Metadata's
@@ -425,22 +434,18 @@ pub(crate) fn decode_spectrum<R: Read + Seek>(
     include_profile: bool,
 ) -> Result<DecodedSpectrum> {
     let arrays = try_extract_spectrum_arrays(raw, source, idx, include_profile)?;
+    // Every intensity fits f32: decode_arrays drops peaks that overflow it.
     let intensity: Vec<f32> = arrays
         .intensity
         .into_iter()
         .map(|value| value as f32)
         .collect();
-    if intensity.iter().any(|value| !value.is_finite()) {
-        return Err(
-            crate::Error::CorruptData("intensity cannot be represented as finite f32")
-                .with_context(decode_context(raw, idx)),
-        );
-    }
     Ok(DecodedSpectrum {
         metadata: arrays.metadata,
         mz: arrays.mz,
         intensity,
         scan_mode: arrays.scan_mode,
+        dropped_peaks: arrays.dropped_peaks,
     })
 }
 
@@ -474,20 +479,41 @@ fn decode_arrays<R: Read + Seek>(
     let meta = scan_metadata(raw, idx).ok_or(crate::Error::InvalidScanIndex(idx))?;
     validate_scan_event(raw, idx)?;
     let event = raw.scan_events.get(idx as usize);
-    let (mz, intensity, scan_mode) =
+    let (mut mz, mut intensity, scan_mode) =
         resolve_scan_arrays(raw, source, meta.scan_number, include_profile, event)?;
-    if mz.len() != intensity.len()
-        || mz.iter().any(|value| !value.is_finite() || *value <= 0.0)
-        || intensity.iter().any(|value| !value.is_finite())
-    {
+    if mz.len() != intensity.len() {
         return Err(crate::Error::CorruptData("invalid decoded peak arrays"));
     }
+    let dropped_peaks = drop_invalid_peaks(&mut mz, &mut intensity);
     Ok(SpectrumArrays {
         metadata: meta,
         mz,
         intensity,
         scan_mode,
+        dropped_peaks,
     })
+}
+
+fn valid_peak(mz: f64, intensity: f64) -> bool {
+    mz.is_finite() && mz > 0.0 && intensity.is_finite() && (intensity as f32).is_finite()
+}
+
+/// Remove peaks whose m/z is not finite and positive or whose intensity is
+/// not finite or overflows f32, so one bad peak does not cost the scan.
+/// Returns how many were removed.
+fn drop_invalid_peaks(mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> usize {
+    let before = mz.len();
+    let mut keep = 0;
+    for i in 0..before {
+        if valid_peak(mz[i], intensity[i]) {
+            mz[keep] = mz[i];
+            intensity[keep] = intensity[i];
+            keep += 1;
+        }
+    }
+    mz.truncate(keep);
+    intensity.truncate(keep);
+    before - keep
 }
 
 /// Iterate every scan in `raw` as a [`SpectrumRecord`].
@@ -568,12 +594,6 @@ fn resolve_scan_arrays<R: Read + Seek>(
             let coeffs = event.map(|e| e.coefficients.as_slice()).unwrap_or(&[]);
             validate_profile_calibration(coeffs, event.and_then(|e| e.preamble.analyzer()))?;
             let pairs = profile.to_mz_intensity(coeffs);
-            if pairs
-                .iter()
-                .any(|(mz, intensity)| !mz.is_finite() || *mz <= 0.0 || !intensity.is_finite())
-            {
-                return Err(crate::Error::CorruptData("invalid decoded profile arrays"));
-            }
             let (mz, int) = pairs.into_iter().unzip();
             return Ok((mz, int, Some(crate::ScanMode::Profile)));
         }
@@ -594,6 +614,19 @@ fn resolve_scan_arrays<R: Read + Seek>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_peaks_are_dropped_not_the_scan() {
+        let mut mz = vec![100.0, -1.0, 0.0, f64::NAN, 200.0, 300.0, f64::INFINITY];
+        let mut intensity = vec![1.0, 2.0, 3.0, 4.0, f64::NAN, 1e300, 5.0];
+        assert_eq!(drop_invalid_peaks(&mut mz, &mut intensity), 6);
+        assert_eq!(mz, [100.0]);
+        assert_eq!(intensity, [1.0]);
+        let mut mz = vec![100.0, 200.0];
+        let mut intensity = vec![0.0, 1.0];
+        assert_eq!(drop_invalid_peaks(&mut mz, &mut intensity), 0);
+        assert_eq!(mz.len(), 2);
+    }
 
     #[test]
     fn profile_calibration_rejects_missing_ftms_and_nonfinite_values() {

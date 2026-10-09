@@ -178,6 +178,7 @@ fn to_msc_record(
         mz,
         intensity,
         scan_mode,
+        ..
     } = parts;
     let precursor = meta.precursor.map(|p| msc::PrecursorInfo {
         target_mz: p.target_mz,
