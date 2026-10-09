@@ -110,6 +110,9 @@ const EXTRA_FIELDS: &[(&str, Getter)] = &[
     ("opentfraw.micro_scan_count", |s| {
         param(s, |p| p.micro_scan_count())
     }),
+    ("opentfraw.isolation_offset_mz", |s| {
+        param(s, |p| p.isolation_offset_mz())
+    }),
     ("opentfraw.agc_enabled", |s| param(s, |p| p.agc_enabled())),
     ("opentfraw.agc_target", |s| param(s, |p| p.agc_target())),
     ("opentfraw.agc_fill", |s| param(s, |p| p.agc_fill())),

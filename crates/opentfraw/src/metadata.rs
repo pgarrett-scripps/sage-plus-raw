@@ -139,15 +139,20 @@ impl<'a> ScanParams<'a> {
             .or_else(|| self.0.get_f64("MS2 Isolation Width (M/Z):"))
     }
 
-    /// MSn isolation window target m/z (the center of the isolation window).
+    /// MSn isolation window target m/z (the center of the isolation window),
+    /// from the `"Target M/Z:"` trailer.
     ///
-    /// Some instruments write this separately from the precursor m/z; when
-    /// absent, callers should fall back to [`Self::monoisotopic_mz`] or to
-    /// the event's first reaction `precursor_mz`.
+    /// Most instruments do not write it; callers then fall back to the
+    /// event's first reaction `precursor_mz`, which is the target m/z.
     pub fn isolation_target_mz(&self) -> Option<f64> {
-        self.0
-            .get_f64("MS2 Isolation Offset:")
-            .or_else(|| self.0.get_f64("Target M/Z:"))
+        self.0.get_f64("Target M/Z:")
+    }
+
+    /// `"MS2 Isolation Offset:"`, a shift in m/z applied to the isolation
+    /// window (often 0). It is an offset, not an m/z, so it is never used as
+    /// the isolation target.
+    pub fn isolation_offset_mz(&self) -> Option<f64> {
+        self.0.get_f64("MS2 Isolation Offset:")
     }
 
     /// Activation energy (eV or %) for the primary activation step.
@@ -493,5 +498,34 @@ impl<'a> StatusLogEntry<'a> {
     /// Get a string field by name.
     pub fn get_string(&self, label: &str) -> Option<&str> {
         self.0.get_string(label)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::generic_data::GenericValue;
+
+    #[test]
+    fn master_and_isolation_labels_are_not_misread() {
+        let record = GenericRecord {
+            values: vec![
+                ("Master Index:".into(), GenericValue::Int32(1)),
+                ("MS2 Isolation Offset:".into(), GenericValue::Float64(2.5)),
+            ],
+        };
+        let params = ScanParams(&record);
+        assert_eq!(params.master_scan_number(), None);
+        assert_eq!(params.isolation_target_mz(), None);
+        assert_eq!(params.isolation_offset_mz(), Some(2.5));
+        let record = GenericRecord {
+            values: vec![
+                ("Master Scan Number:".into(), GenericValue::Int32(17)),
+                ("Target M/Z:".into(), GenericValue::Float64(500.25)),
+            ],
+        };
+        let params = ScanParams(&record);
+        assert_eq!(params.master_scan_number(), Some(17));
+        assert_eq!(params.isolation_target_mz(), Some(500.25));
     }
 }
