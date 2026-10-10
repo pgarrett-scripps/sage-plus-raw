@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-10
+
 - Renamed the package to `sage-plus-raw` (library `sage_plus_raw`) for Sage Plus.
 - Decode scan events from their self-describing layout, falling back per file to the 1.4.1 fixed-size layouts, so every file opens and MS levels stay in step on EThcD, UVPD, SPS-MS3, ion-trap and negative-mode files.
 - Every scan above MS1 has a precursor, including MSX, EThcD and SPS-MS3 scans.
