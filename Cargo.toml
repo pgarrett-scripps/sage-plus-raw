@@ -9,7 +9,6 @@ rust-version = "1.85"
 authors = ["Nathan Riley <git@nathanriley.com>", "Sage Plus contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/pgarrett-scripps/sage-plus-raw"
-homepage = "https://github.com/pgarrett-scripps/sage-plus-raw"
 keywords = ["mass-spectrometry", "thermo", "raw", "proteomics", "orbitrap"]
 categories = ["parser-implementations", "science"]
 

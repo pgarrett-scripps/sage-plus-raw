@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Invalid single peaks are dropped and counted in `dropped_peaks` instead of failing the scan.
 - Removed mzML export, the openmassspec-core dependency, the Python bindings, the documentation site and the deprecated `extract_spectrum` and `iter_spectra`.
 - Merged upstream OpenTFRaw 3.0.0 (profile calibration in 96-byte events, lock-mass counts, Lumos DIA boundaries, source CID).
-- Prepared the crate for crates.io: the package ships LICENSE, NOTICE and README, and the homepage points at this repository.
+- Prepared the crate for crates.io: the package ships LICENSE, NOTICE and README, and the metadata no longer points at the upstream repository.
 - Added CI (fmt, clippy, tests on Linux, macOS and Windows, MSRV 1.85, docs, cargo deny, publish dry-run, fuzz smoke) and a tag-driven release workflow using crates.io Trusted Publishing.
 - Added a code of conduct, issue forms, a release guide and a `cargo deny` policy. Removed the internal rc.2 review notes.
 

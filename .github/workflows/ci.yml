@@ -130,5 +130,5 @@ jobs:
         run: |
           for target in open read_scan_peaks strict_decode
           do
-            cargo fuzz run "$target" -- -max_total_time=20 -timeout=5 -rss_limit_mb=1024 -max_len=1048576 -seed=42
+            cargo fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time=20 -timeout=5 -rss_limit_mb=1024 -max_len=1048576 -seed=42
           done
