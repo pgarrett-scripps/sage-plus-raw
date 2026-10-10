@@ -1,9 +1,8 @@
 [package]
-publish = false
 name = "sage-plus-raw"
-description = "Native Thermo RAW reader for Sage Plus, forked from Sigilweaver OpenTFRaw."
+description = "Pure-Rust reader for Thermo Fisher RAW mass spectrometry files, forked from Sigilweaver OpenTFRaw."
 readme = "../../README.md"
-include = ["src/**", "examples/**", "tests/**", "Cargo.toml"]
+include = ["src/**", "examples/**", "tests/**", "Cargo.toml", "LICENSE", "NOTICE", "README.md"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,6 +18,7 @@ name = "sage_plus_raw"
 
 [package.metadata.docs.rs]
 all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
 
 [lints.rust]
 unsafe_code = "forbid"

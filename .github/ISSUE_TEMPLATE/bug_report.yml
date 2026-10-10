@@ -1,0 +1,49 @@
+name: Bug report
+description: Report incorrect decoding, a crash or other unexpected behavior
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what did you get instead?
+    validations:
+      required: true
+  - type: textarea
+    id: raw-file
+    attributes:
+      label: RAW file / instrument
+      description: >
+        Instrument model, acquisition mode (DDA, DIA, PRM, SPS-MS3, ...), RAW format version
+        and, if public, a link to the file (for example a PRIDE accession). If the file is private,
+        describe its shape instead and do not attach it.
+      placeholder: "Orbitrap Exploris 480, DDA, RAW v66, PXD012345/file.raw"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: A minimal command or code snippet that shows the problem.
+      render: rust
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: sage-plus-raw version or commit
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS and Rust version
+      placeholder: "Ubuntu 24.04, rustc 1.90.0"
+  - type: textarea
+    id: reference
+    attributes:
+      label: Reference evidence
+      description: >
+        How was the expected result established (for example a public reference mzML)? Do not paste
+        proprietary vendor source, SDK headers or confidential instrument data.

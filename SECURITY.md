@@ -1,18 +1,18 @@
 # Security policy
 
-This policy applies to the independent `sage-plus-raw` fork maintained in [pgarrett-scripps/opentfraw](https://github.com/pgarrett-scripps/opentfraw). It does not promise support from the upstream OpenTFRaw maintainers.
+This policy applies to the independent `sage-plus-raw` fork maintained in [pgarrett-scripps/sage-plus-raw](https://github.com/pgarrett-scripps/sage-plus-raw). It does not promise support from the upstream OpenTFRaw maintainers.
 
 ## Reporting
 
-While the repository is private, collaborators should contact its owner through their established private project channel. Do not disclose exploit details in public issues or send private acquisition data without permission.
+Report vulnerabilities privately through [this repository's security advisories](https://github.com/pgarrett-scripps/sage-plus-raw/security/advisories/new). Do not disclose exploit details in public issues, and do not send private acquisition data without permission.
 
-Before making the repository public, maintainers must enable and verify GitHub private vulnerability reporting. The intended public reporting location is [this repository's security advisories](https://github.com/pgarrett-scripps/opentfraw/security/advisories). Its availability must be checked during the launch gate. This document does not claim the public reporting service is already enabled.
+Include the crate version or commit, operating system, Rust version, expected behavior and a minimal reproduction. Prefer synthetic byte sequences over sensitive RAW files. Maintainers will coordinate disclosure and attribution with the reporter. This is a volunteer-maintained project, so no acknowledgment or remediation deadline is guaranteed.
 
-Include the commit or package version, operating system, Rust version, expected behavior and a minimal reproduction. Prefer synthetic byte sequences over sensitive RAW files. Maintainers will coordinate disclosure and attribution with the reporter. No acknowledgment or remediation deadline is guaranteed during release preparation.
+## Supported versions
 
-## Scope and supported versions
+Security fixes are made on the latest published release of `sage-plus-raw` on crates.io and on `main`. Earlier releases and upstream OpenTFRaw releases are outside this fork's support commitment.
 
-The current launch candidate and the most recent private release are evaluated for security fixes. Earlier upstream releases are outside this fork's support commitment. No crate is published under this package identity.
+## Scope
 
 Relevant findings include malformed-input panics, excessive allocation, infinite loops, unintended file writes and reachable dependency vulnerabilities. Scientific decoding errors also matter, even when they do not create a security vulnerability.
 
@@ -20,4 +20,4 @@ The parser forbids unsafe Rust in its own crate. That restriction is not a guara
 
 ## Distribution
 
-The Rust manifests retain `publish = false`. There are no registry upload, website deployment or visibility-changing workflows.
+The crate is published to crates.io only by the release workflow in `.github/workflows/release.yml`, triggered by a version tag. See `RELEASING.md`. Dependencies are checked with `cargo deny` against the RustSec advisory database on every CI run.

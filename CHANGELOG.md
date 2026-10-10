@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Invalid single peaks are dropped and counted in `dropped_peaks` instead of failing the scan.
 - Removed mzML export, the openmassspec-core dependency, the Python bindings, the documentation site and the deprecated `extract_spectrum` and `iter_spectra`.
 - Merged upstream OpenTFRaw 3.0.0 (profile calibration in 96-byte events, lock-mass counts, Lumos DIA boundaries, source CID).
+- Prepared the crate for crates.io: the package ships LICENSE, NOTICE and README, and the homepage points at this repository.
+- Added CI (fmt, clippy, tests on Linux, macOS and Windows, MSRV 1.85, docs, cargo deny, publish dry-run, fuzz smoke) and a tag-driven release workflow using crates.io Trusted Publishing.
+- Added a code of conduct, issue forms, a release guide and a `cargo deny` policy. Removed the internal rc.2 review notes.
 
 ## [0.1.0-rc.2] - Unpublished candidate
 
@@ -44,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed invented SRM polarity, isolation width, reaction energy units and dangling precursor references.
 - Added pinned, hash-verified public acquisition regressions to Linux, macOS and Windows CI, plus minimum Rust version and package verification.
 - Retained legacy lossy extraction APIs for source compatibility and documented their limits.
+
+# Upstream OpenTFRaw history
+
+The entries below are upstream OpenTFRaw releases that this fork merged. Their
+version numbers are OpenTFRaw versions, not `sage-plus-raw` versions.
 
 ## [3.0.0] - 2026-10-04
 

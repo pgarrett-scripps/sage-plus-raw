@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest a new capability or API
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that sage-plus-raw does not support today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: The API or behavior you would like to see.
+  - type: textarea
+    id: raw-file
+    attributes:
+      label: RAW file / instrument
+      description: Instrument models or acquisition modes involved, and any public example files.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

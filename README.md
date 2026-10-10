@@ -1,15 +1,45 @@
 # sage-plus-raw
 
+[![CI](https://github.com/pgarrett-scripps/sage-plus-raw/actions/workflows/ci.yml/badge.svg)](https://github.com/pgarrett-scripps/sage-plus-raw/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/sage-plus-raw.svg)](https://crates.io/crates/sage-plus-raw)
+[![docs.rs](https://img.shields.io/docsrs/sage-plus-raw)](https://docs.rs/sage-plus-raw)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 Fork of Sigilweaver OpenTFRaw by Nathan Riley and contributors; not affiliated with Sigilweaver or Thermo Fisher Scientific.
 
-Native Rust Thermo RAW reading for [Sage Plus](https://github.com/pgarrett-scripps/sage-plus), without .NET or vendor DLLs. The package is `sage-plus-raw` and the library is `sage_plus_raw`. It is not published to crates.io. Depend on it by Git revision:
+Native Rust Thermo RAW reading for [Sage Plus](https://github.com/pgarrett-scripps/sage-plus), without .NET or vendor DLLs. The package is `sage-plus-raw` and the library is `sage_plus_raw`. The minimum supported Rust version is 1.85.
+
+Upstream copyright and Apache-2.0 licensing are retained. See [LICENSE](LICENSE), [NOTICE](NOTICE), [ATTRIBUTION.md](ATTRIBUTION.md) and [CONTRIBUTORS.md](CONTRIBUTORS.md).
+
+## Install
+
+```sh
+cargo add sage-plus-raw
+```
+
+or in `Cargo.toml`:
 
 ```toml
 [dependencies]
-sage-plus-raw = { git = "https://github.com/pgarrett-scripps/opentfraw", rev = "FULL_REVIEWED_COMMIT" }
+sage-plus-raw = "0.1"
 ```
 
-Upstream copyright and Apache-2.0 licensing are retained. See [LICENSE](LICENSE), [NOTICE](NOTICE), [ATTRIBUTION.md](ATTRIBUTION.md) and [CONTRIBUTORS.md](CONTRIBUTORS.md).
+## Usage
+
+```rust,no_run
+use sage_plus_raw::{try_iter_spectra, RawFileReader};
+use std::{fs::File, io::BufReader};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let raw = RawFileReader::open_path("acquisition.raw")?;
+    let mut source = BufReader::new(File::open("acquisition.raw")?);
+    for spectrum in try_iter_spectra(&raw, &mut source, false) {
+        let spectrum = spectrum?;
+        println!("scan {}: {} peaks", spectrum.scan_number, spectrum.mz.len());
+    }
+    Ok(())
+}
+```
 
 ## Reading
 

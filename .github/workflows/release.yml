@@ -1,0 +1,134 @@
+name: Release
+
+# Pushing a tag vX.Y.Z publishes sage-plus-raw X.Y.Z to crates.io and creates the
+# matching GitHub release. See RELEASING.md.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: verify tag and changelog
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tag matches the Cargo version
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version=$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "sage-plus-raw") | .version')
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::tag $tag does not match sage-plus-raw version $version (expected v$version)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: CHANGELOG has a section for this version
+        run: sh scripts/changelog_section.sh "${{ steps.version.outputs.version }}"
+
+  test:
+    name: test (${{ matrix.os }})
+    needs: verify
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: cargo clippy --locked -p sage-plus-raw --all-targets -- -D warnings
+      - run: cargo test --locked -p sage-plus-raw
+      - run: python scripts/fetch_public_fixtures.py
+      - run: python scripts/prepare_reference_arrays.py
+      - run: cargo test --locked -p sage-plus-raw --test public_fixtures -- --ignored
+        env:
+          THERMO_PUBLIC_CORPUS: corpus/public
+
+  publish:
+    name: publish
+    needs: [verify, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release
+      id-token: write # crates.io Trusted Publishing (OIDC)
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Release notes from CHANGELOG
+        run: sh scripts/changelog_section.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
+
+      - name: Check whether this version is already on crates.io
+        id: published
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' \
+            -A "sage-plus-raw release workflow (https://github.com/${GITHUB_REPOSITORY})" \
+            "https://crates.io/api/v1/crates/sage-plus-raw/$VERSION")
+          if [ "$status" = "200" ]; then
+            echo "sage-plus-raw $VERSION is already published; skipping cargo publish."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Trusted Publishing only works once the crate exists on crates.io and the
+      # publisher is configured there. Until then (the first release) this step
+      # fails softly and the CARGO_REGISTRY_TOKEN secret is used instead.
+      - name: Authenticate with crates.io (Trusted Publishing)
+        id: auth
+        if: steps.published.outputs.exists != 'true'
+        continue-on-error: true
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: cargo publish
+        if: steps.published.outputs.exists != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::error::No crates.io credentials: Trusted Publishing failed and the CARGO_REGISTRY_TOKEN secret is not set. See RELEASING.md."
+            exit 1
+          fi
+          if [ "${{ steps.auth.outcome }}" = "success" ]; then
+            echo "Publishing with a Trusted Publishing token."
+          else
+            echo "Trusted Publishing unavailable; publishing with the CARGO_REGISTRY_TOKEN secret."
+          fi
+          cargo publish --locked -p sage-plus-raw
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; leaving it unchanged."
+            exit 0
+          fi
+          prerelease=""
+          case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "sage-plus-raw $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            $prerelease

@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked -p sage-plus-raw --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: cargo test --locked -p sage-plus-raw
+      # Public ProteoWizard fixtures, downloaded and SHA-256 checked. Tests that
+      # need the private or large PRIDE corpus stay #[ignore]d and are not run here.
+      - run: python scripts/fetch_public_fixtures.py
+      - run: python scripts/prepare_reference_arrays.py
+      - run: cargo test --locked -p sage-plus-raw --test public_fixtures -- --ignored
+        env:
+          THERMO_PUBLIC_CORPUS: corpus/public
+
+  msrv:
+    name: MSRV (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked -p sage-plus-raw
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --locked -p sage-plus-raw --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses bans sources
+
+  package:
+    name: publish dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Packaged LICENSE and NOTICE match the repository root
+        run: |
+          cmp LICENSE crates/sage-plus-raw/LICENSE
+          cmp NOTICE crates/sage-plus-raw/NOTICE
+      - run: cargo package --locked -p sage-plus-raw --list
+      - run: cargo publish --locked -p sage-plus-raw --dry-run
+
+  fuzz-smoke:
+    name: fuzz smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-09-26
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/sage-plus-raw/fuzz
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz@0.13.1
+      - run: python scripts/fetch_public_fixtures.py
+      - run: python scripts/seed_fuzz.py
+      - run: cargo metadata --locked --manifest-path crates/sage-plus-raw/fuzz/Cargo.toml --format-version 1 > /dev/null
+      - name: Bounded public-fixture fuzzing
+        working-directory: crates/sage-plus-raw
+        run: |
+          for target in open read_scan_peaks strict_decode
+          do
+            cargo fuzz run "$target" -- -max_total_time=20 -timeout=5 -rss_limit_mb=1024 -max_len=1048576 -seed=42
+          done
