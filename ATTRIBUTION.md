@@ -17,6 +17,14 @@ field offsets.
 
 Source: https://github.com/prvst/unfinnigan
 
+## Format specifications
+
+The embedded method file is read as a Compound File Binary container, following Microsoft's
+open specification [MS-CFB](https://learn.microsoft.com/openspecs/windows_protocols/ms-cfb/)
+("Compound File Binary File Format"). Stream reads were checked during development against
+[olefile](https://github.com/decalage2/olefile) 0.47 (Philippe Lagadec, BSD-2-Clause), an
+independent open-source reader of that format. It is not a dependency.
+
 ## Rust dependencies
 
 - [roxmltree](https://github.com/RazrFalcon/roxmltree) -- read-only parsing of
