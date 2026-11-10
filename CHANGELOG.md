@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-09
+
 - A trailer string with invalid UTF-16 (an unpaired surrogate) is decoded lossily instead of failing the whole file (upstream 9cb8b02).
 - `freq_to_mz` returns NaN for a calibration coefficient layout it does not know, instead of the raw frequency; such peaks are then dropped and counted in `dropped_peaks` (upstream 2189a7f).
 - The embedded method file is read as a Compound File Binary container, so source-CID settings are found in a fragmented stream and stop at the stream's recorded end (upstream 27ed603).
