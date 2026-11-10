@@ -85,7 +85,11 @@ impl<'a> CompoundFile<'a> {
         let mut entries: Vec<&[u8; DIR_ENTRY_LEN]> = Vec::new();
         for sector in chain(&file.fat, u32_at(header, 0x30)?)? {
             let sector = file.sector(sector, sector_len)?;
-            entries.extend(sector.as_chunks::<DIR_ENTRY_LEN>().0);
+            entries.extend(
+                sector
+                    .chunks_exact(DIR_ENTRY_LEN)
+                    .filter_map(|entry| <&[u8; DIR_ENTRY_LEN]>::try_from(entry).ok()),
+            );
         }
         let root = entries.first().filter(|entry| entry[0x42] == OBJECT_ROOT)?;
         file.mini_stream = stream_entry(root, version)?;
@@ -213,14 +217,12 @@ fn gather<'b>(
 fn stream_entry(entry: &[u8; DIR_ENTRY_LEN], version: u16) -> Option<Stream> {
     // The name length counts bytes and includes the terminator.
     let name_len = usize::from(u16_at(entry, 0x40)?);
-    if !(2..=64).contains(&name_len) || !name_len.is_multiple_of(2) {
+    if !(2..=64).contains(&name_len) || name_len % 2 != 0 {
         return None;
     }
     let units: Vec<u16> = entry[..name_len - 2]
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|unit| u16::from_le_bytes(*unit))
+        .chunks_exact(2)
+        .map(|unit| u16::from_le_bytes([unit[0], unit[1]]))
         .collect();
     let len = u64::from_le_bytes(entry.get(0x78..0x80)?.try_into().ok()?);
     Some(Stream {
@@ -234,10 +236,8 @@ fn stream_entry(entry: &[u8; DIR_ENTRY_LEN], version: u16) -> Option<Stream> {
 
 fn u32s(bytes: &[u8]) -> impl Iterator<Item = u32> + '_ {
     bytes
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|word| u32::from_le_bytes(*word))
+        .chunks_exact(4)
+        .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
 }
 
 fn u16_at(bytes: &[u8], offset: usize) -> Option<u16> {

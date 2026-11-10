@@ -27,14 +27,12 @@ pub(crate) fn method_xml(window: &[u8]) -> Option<String> {
 }
 
 fn utf16le_text(bytes: &[u8]) -> Option<String> {
-    if !bytes.len().is_multiple_of(2) {
+    if bytes.len() % 2 != 0 {
         return None;
     }
     let units: Vec<u16> = bytes
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|unit| u16::from_le_bytes(*unit))
+        .chunks_exact(2)
+        .map(|unit| u16::from_le_bytes([unit[0], unit[1]]))
         .collect();
     let text = String::from_utf16(&units).ok()?;
     // A byte order mark is not part of the document.
