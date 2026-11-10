@@ -18,12 +18,17 @@
 /// activation when available.
 /// These reconstructed filters are not original vendor filter strings.
 ///
+/// An [`Activation::EThcD`] scan renders a single
+/// `<precursor>@etd@hcd<supplemental energy>` clause; every other method
+/// renders `<precursor>@<method><energy>`.
+///
 /// ## Examples
 ///
 /// - `FTMS + p NSI Full ms [350.0000-1500.0000]`
 /// - `FTMS + c NSI d Full ms2 645.8311 [150.0000-2000.0000]`
 /// - `ITMS + c NSI d Full ms2 520.2400 [135.0000-1060.0000]`
-/// - `FTMS + c NSI d Full ms2 649.1234 [150.0000-2000.0000]` (EThcD)
+/// - `ITMS + c NSI d Full ms2 467.1021@etd130.00 [50.0000-1415.0000]` (ETD)
+/// - `FTMS + c NSI d Full ms2 507.8661@etd@hcd25.00 [110.0000-1026.0000]` (EThcD)
 /// - `ITMS + c NSI d Full ms3 810.50 265.27 [100.0000-1000.0000]` (MS3)
 use crate::scan_event::ScanEvent;
 use crate::scan_index::ScanIndexEntry;
@@ -80,7 +85,7 @@ pub(crate) fn build_filter_with_activation(
     index_entry: &ScanIndexEntry,
     precursor_mz: Option<f64>,
     activation_energy: Option<f64>,
-    _supplemental_energy: Option<f64>,
+    supplemental_energy: Option<f64>,
     activation: Option<Activation>,
     source_cid_energy_ev: Option<f64>,
 ) -> String {
@@ -173,14 +178,30 @@ pub(crate) fn build_filter_with_activation(
             }
             out.push(' ');
             out.push_str(&format!("{mz:.4}"));
-            if let Some(method) = activation {
-                out.push('@');
-                out.push_str(method.as_str());
-                if let Some(energy) =
-                    activation_energy.filter(|value| value.is_finite() && *value > 0.0)
-                {
-                    out.push_str(&format!("{energy:.2}"));
+            let usable = |value: &f64| value.is_finite() && *value > 0.0;
+            match activation {
+                // EThcD is written as two activation clauses. The
+                // electron-transfer step carries no value of its own and the
+                // supplemental HCD energy follows `@hcd`. Filter readers
+                // (sage among them) look for `@etd` and `@hcd` separately,
+                // so a single `@ethcd` token would match neither.
+                Some(Activation::EThcD) => {
+                    out.push_str("@etd@hcd");
+                    if let Some(energy) = supplemental_energy
+                        .filter(usable)
+                        .or_else(|| activation_energy.filter(usable))
+                    {
+                        out.push_str(&format!("{energy:.2}"));
+                    }
                 }
+                Some(method) => {
+                    out.push('@');
+                    out.push_str(method.as_str());
+                    if let Some(energy) = activation_energy.filter(usable) {
+                        out.push_str(&format!("{energy:.2}"));
+                    }
+                }
+                None => {}
             }
         }
     }
@@ -390,5 +411,168 @@ mod tests {
         let idx = make_index(150.0, 2000.0);
         let s = build_filter(&ev, &idx, Some(649.12), Some(35.0), Some(28.0));
         assert_eq!(s, "FTMS + c NSI d Full ms2 649.1200 [150.0000-2000.0000]");
+    }
+
+    /// v66 MS2 preamble of an electron-transfer event: dependent, a named
+    /// code at byte 24, and the electron-transfer flag at byte 120.
+    fn etd_preamble(analyzer: u8) -> ScanEventPreamble {
+        let mut pre = make_preamble(1, 0, 2, 0);
+        pre.bytes[10] = 1; // dependent
+        pre.bytes[40] = analyzer;
+        pre.bytes[24] = 4; // named code, identical on MS1 and MS2 events
+        pre.bytes[120] = 1; // electron transfer
+        pre
+    }
+
+    fn reaction(precursor_mz: f64, tag: u32) -> Reaction {
+        Reaction {
+            precursor_mz,
+            unknown_double: 0.0,
+            energy: 0.0,
+            unknown_long1: tag,
+            unknown_long2: 0,
+        }
+    }
+
+    fn event(preamble: ScanEventPreamble, reactions: Vec<Reaction>) -> ScanEvent {
+        ScanEvent {
+            preamble,
+            reactions,
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        }
+    }
+
+    #[test]
+    fn etd_flag_renders_a_single_etd_clause() {
+        let ev = event(etd_preamble(0), vec![reaction(467.1021, 0)]);
+        assert_eq!(ev.qualified_activation(66), Some(Activation::ETD));
+        let idx = make_index(50.0, 1415.0);
+        assert_eq!(
+            build_filter_with_activation(
+                &ev,
+                &idx,
+                Some(467.1021),
+                Some(130.0),
+                None,
+                ev.qualified_activation(66),
+                None,
+            ),
+            "ITMS + c NSI d Full ms2 467.1021@etd130.00 [50.0000-1415.0000]"
+        );
+    }
+
+    #[test]
+    fn ethcd_event_renders_two_activation_clauses() {
+        let ev = event(
+            etd_preamble(4),
+            vec![reaction(507.8661, 0), reaction(0.0, 0)],
+        );
+        assert!(ev.has_supplemental_reaction());
+        assert_eq!(ev.qualified_activation(66), Some(Activation::EThcD));
+        let idx = make_index(110.0, 1026.0);
+        let expected = "FTMS + c NSI d Full ms2 507.8661@etd@hcd25.00 [110.0000-1026.0000]";
+        assert_eq!(
+            build_filter_with_activation(
+                &ev,
+                &idx,
+                Some(507.8661),
+                None,
+                Some(25.0),
+                ev.qualified_activation(66),
+                None,
+            ),
+            expected
+        );
+        // Without a supplemental label the primary energy fills the clause:
+        // on these events it is the supplemental HCD value.
+        assert_eq!(
+            build_filter_with_activation(
+                &ev,
+                &idx,
+                Some(507.8661),
+                Some(25.0),
+                None,
+                ev.qualified_activation(66),
+                None,
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn etd_flag_needs_a_v66_msn_event_and_a_named_code() {
+        // One reaction, so EThcD cannot apply; only the ETD decision varies.
+        let reactions = || vec![reaction(467.1021, 0)];
+        // Version 63 and 64 preambles are not read for the flag.
+        let mut pre = etd_preamble(0);
+        pre.bytes.truncate(128);
+        assert_eq!(event(pre, reactions()).qualified_activation(66), None);
+        // MS1 event.
+        let mut pre = etd_preamble(0);
+        pre.bytes[6] = 1;
+        assert_eq!(event(pre, reactions()).qualified_activation(66), None);
+        // Byte 24 zero or out of range, as on misread scan events.
+        for code in [0u8, 11, 200] {
+            let mut pre = etd_preamble(0);
+            pre.bytes[24] = code;
+            assert_eq!(event(pre, reactions()).qualified_activation(66), None);
+        }
+        // Byte 120 = 2 (Q Exactive, Exploris, Astral) is not electron transfer.
+        let mut pre = etd_preamble(0);
+        pre.bytes[120] = 2;
+        assert_eq!(event(pre, reactions()).qualified_activation(66), None);
+        // A pre-v66 file is not read for the flag either.
+        assert_eq!(
+            event(etd_preamble(0), reactions()).qualified_activation(64),
+            None
+        );
+    }
+
+    #[test]
+    fn the_reaction_tag_outranks_the_electron_transfer_flag() {
+        // Tag 11 stays HCD and tag 9 stays ETD whatever byte 120 holds, even
+        // in the two-reaction shape that would otherwise read as EThcD.
+        for (tag, expected) in [(11u32, Activation::HCD), (9, Activation::ETD)] {
+            for flag in [0u8, 1, 2] {
+                let mut pre = etd_preamble(4);
+                pre.bytes[120] = flag;
+                let ev = event(pre, vec![reaction(507.8661, tag), reaction(0.0, tag)]);
+                assert_eq!(ev.qualified_activation(66), Some(expected));
+            }
+        }
+    }
+
+    #[test]
+    fn cid_and_hcd_filters_are_byte_identical_whatever_byte_120_holds() {
+        let idx = make_index(110.0, 1026.0);
+        let render = |flag: u8, tag: u32, analyzer: u8| {
+            let mut pre = etd_preamble(analyzer);
+            pre.bytes[120] = flag;
+            let ev = event(pre, vec![reaction(507.8661, tag)]);
+            build_filter_with_activation(
+                &ev,
+                &idx,
+                Some(507.8661),
+                Some(30.0),
+                None,
+                ev.qualified_activation(66),
+                None,
+            )
+        };
+        // Tag 11 on an Orbitrap: an unchanged `@hcd` clause.
+        assert_eq!(
+            render(0, 11, 4),
+            "FTMS + c NSI d Full ms2 507.8661@hcd30.00 [110.0000-1026.0000]"
+        );
+        // An ion-trap CID scan the reaction tag leaves unresolved: no clause,
+        // and byte 120 = 0 or 2 does not add one.
+        for flag in [0u8, 2] {
+            assert_eq!(
+                render(flag, 7, 0),
+                "ITMS + c NSI d Full ms2 507.8661 [110.0000-1026.0000]"
+            );
+            assert_eq!(render(flag, 11, 4), render(0, 11, 4));
+        }
     }
 }

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `freq_to_mz` returns NaN for a calibration coefficient layout it does not know, instead of the raw frequency; such peaks are then dropped and counted in `dropped_peaks` (upstream 2189a7f).
 - The embedded method file is read as a Compound File Binary container, so source-CID settings are found in a fragmented stream and stop at the stream's recorded end (upstream 27ed603).
 - An empty controller address table in the RawFileInfo preamble reports `Error::CorruptData` instead of indexing an empty table.
+- ETD and EThcD activation is decoded from the electron-transfer flag at byte 120 of the version 66 scan-event preamble, for MS2 events whose reaction tag is unresolved; an EThcD scan filter renders a `@etd@hcd<supplemental energy>` clause. Scans that already resolved from the reaction tag are unchanged (evidence: upstream 47e2b76).
 
 ## [0.1.0] - 2026-10-10
 

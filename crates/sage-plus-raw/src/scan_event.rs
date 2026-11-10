@@ -116,6 +116,28 @@ impl ScanEventPreamble {
     pub fn activation_byte(&self) -> u8 {
         self.bytes.get(24).copied().unwrap_or(0)
     }
+
+    /// Electron-transfer flag: byte 120 of a 136-byte (version 66) preamble,
+    /// `true` only for 1.
+    ///
+    /// Byte 24 is identical on the MS1 and MS2 events of electron-transfer
+    /// files, so it cannot carry the method. The evidence for byte 120 is
+    /// upstream OpenTFRaw commit 47e2b76 (see ATTRIBUTION.md), which reports
+    /// it as 1 on all 10,836 MS2 events and 0 on every MS1 event of the
+    /// PRIDE PXD006767 Orbitrap Velos Pro files whose embedded method says
+    /// "Activation Type: ETD"; 1 on all 59,034 MS2 events of the PXD077396
+    /// and PXD070648 files whose method says "Is EThcD Active = True"; 0 on
+    /// Velos-family and tribrid files declaring only CID or HCD; and 2 on
+    /// Q Exactive, Exploris and Astral files.
+    ///
+    /// Version 63 and 64 preambles also have a byte 120, but no file of
+    /// those versions is known to use electron transfer, so it is not read
+    /// there. [`ScanEvent::qualified_activation`] additionally requires that
+    /// byte 24 hold a named activation code, because misread scan events
+    /// also show 1 here, mostly with byte 24 zero or out of range.
+    pub fn is_electron_transfer(&self) -> bool {
+        self.bytes.len() == 136 && self.bytes.get(120) == Some(&1)
+    }
 }
 
 impl ScanEvent {
@@ -123,6 +145,14 @@ impl ScanEvent {
     /// The byte-24 preamble value is identical for both methods. The reaction
     /// tag distinguishes them in the qualified v66 layouts. Other tags and
     /// mixed reactions remain unknown. Raw reaction words are preserved.
+    ///
+    /// The reaction tag is tried first and its result is returned unchanged,
+    /// so no scan that already resolves keeps a different method. Only an
+    /// event the tag leaves unresolved falls through to the preamble
+    /// electron-transfer flag ([`ScanEventPreamble::is_electron_transfer`]),
+    /// which yields [`crate::Activation::ETD`], or
+    /// [`crate::Activation::EThcD`] when a supplemental reaction accompanies
+    /// it ([`Self::has_supplemental_reaction`]).
     pub fn qualified_activation(&self, version: u32) -> Option<crate::Activation> {
         if version != 66
             || self.preamble.bytes.len() != 136
@@ -130,6 +160,12 @@ impl ScanEvent {
         {
             return None;
         }
+        self.reaction_tag_activation()
+            .or_else(|| self.electron_transfer_activation())
+    }
+
+    /// Activation from the reaction tag of a qualified v66 layout.
+    fn reaction_tag_activation(&self) -> Option<crate::Activation> {
         let first = self.reactions.first()?;
         if first.unknown_long2 != 0
             || self.reactions.iter().any(|reaction| {
@@ -143,6 +179,41 @@ impl ScanEvent {
             11 => Some(crate::Activation::HCD),
             _ => None,
         }
+    }
+
+    /// Activation from the preamble electron-transfer flag, for events whose
+    /// reaction tag is unresolved.
+    ///
+    /// The flag is only read when byte 24 holds a named activation code:
+    /// misread scan events also set it, mostly with byte 24 zero or out of
+    /// range (upstream OpenTFRaw 47e2b76).
+    fn electron_transfer_activation(&self) -> Option<crate::Activation> {
+        if !self.preamble.is_electron_transfer()
+            || crate::Activation::from_byte(self.preamble.activation_byte()).is_none()
+        {
+            return None;
+        }
+        if self.has_supplemental_reaction() {
+            Some(crate::Activation::EThcD)
+        } else {
+            Some(crate::Activation::ETD)
+        }
+    }
+
+    /// Whether this event reads out in the Orbitrap with two or more
+    /// reactions of which exactly one carries a precursor m/z. The
+    /// precursor-less reaction is the supplemental step, so an
+    /// electron-transfer event of this shape is EThcD. The Orbitrap Velos
+    /// Pro ETD files store one reaction per event and stay ETD.
+    pub fn has_supplemental_reaction(&self) -> bool {
+        self.preamble.analyzer() == Some(crate::Analyzer::FTMS)
+            && self.reactions.len() >= 2
+            && self
+                .reactions
+                .iter()
+                .filter(|reaction| reaction.precursor_mz > 0.0)
+                .count()
+                == 1
     }
 
     /// Read one scan event.

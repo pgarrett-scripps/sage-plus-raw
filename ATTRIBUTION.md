@@ -4,6 +4,13 @@
 
 This independently maintained fork derives from [OpenTFRaw](https://github.com/Sigilweaver/OpenTFRaw), originally authored by Nathan Riley and contributors. Original copyright 2026 Sigilweaver Holdings LLC and Apache-2.0 licensing are retained. See NOTICE, LICENSE and CONTRIBUTORS.md. The fork does not own the upstream opentfraw registry identity or website.
 
+Format findings merged from upstream after the fork are credited in the code at the point of
+use. The electron-transfer flag at byte 120 of the version 66 scan-event preamble
+(crates/sage-plus-raw/src/scan_event.rs) comes from upstream commit 47e2b76, which established
+it from the PRIDE PXD006767, PXD077396 and PXD070648 files against their embedded instrument
+methods. The decoding here reads that byte within this fork's reaction-tag design; the evidence
+is upstream's.
+
 Qualification also uses publicly distributed ProteoWizard RAW and reference mzML fixtures at the revision recorded in scripts/public-fixtures.json. Those files are downloaded and hash-checked during tests, not redistributed in the Rust package.
 
 ## Prior art
