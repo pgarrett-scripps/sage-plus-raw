@@ -1,5 +1,5 @@
 use crate::binary_reader::BinaryReader;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use std::io::{Read, Seek};
 
 /// The critical preamble containing addresses and acquisition date.
@@ -216,8 +216,7 @@ impl RawFileInfoPreamble {
                 run_header_addrs.push(addr);
             }
 
-            let run_header_addr = run_header_addrs[0];
-            let run_header_addr_2 = run_header_addrs.get(1).copied().unwrap_or(0);
+            let (run_header_addr, run_header_addr_2) = primary_run_header_addrs(&run_header_addrs)?;
 
             // Remaining padding to reach end of address-table region.
             // The region size differs by file version:
@@ -278,6 +277,17 @@ impl RawFileInfoPreamble {
             })
         }
     }
+}
+
+/// The MS controller's run-header address, and the second controller's or 0.
+///
+/// A table that decoded to no entries is corrupt: every caller needs the
+/// first address, and indexing an empty table would panic.
+fn primary_run_header_addrs(addrs: &[u64]) -> Result<(u64, u64)> {
+    let first = *addrs
+        .first()
+        .ok_or(Error::CorruptData("empty controller address table"))?;
+    Ok((first, addrs.get(1).copied().unwrap_or(0)))
 }
 
 #[cfg(test)]
@@ -419,5 +429,23 @@ mod tests {
     fn acquisition_date_rfc3339_none_when_year_zero() {
         let p = preamble(0, 1, 1, 0, 0, 0, 0);
         assert_eq!(p.acquisition_date_rfc3339(), None);
+    }
+
+    #[test]
+    fn primary_run_header_addrs_rejects_an_empty_controller_table() {
+        let err = primary_run_header_addrs(&[]).unwrap_err();
+        assert!(
+            matches!(err, Error::CorruptData(_)),
+            "expected CorruptData, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn primary_run_header_addrs_defaults_the_second_controller_to_zero() {
+        assert_eq!(primary_run_header_addrs(&[0x1000]).unwrap(), (0x1000, 0));
+        assert_eq!(
+            primary_run_header_addrs(&[0x1000, 0x2000, 0x3000]).unwrap(),
+            (0x1000, 0x2000)
+        );
     }
 }
