@@ -157,33 +157,36 @@ impl<R: Read + Seek> BinaryReader<R> {
     }
 
     /// Read `count` fixed-size items into `buf` in one go, for a stream of
-    /// identical records such as a scan's peak list or profile signal.
+    /// identical records such as a scan's peak list or profile signal, and
+    /// return the bytes read.
     ///
-    /// `buf` is cleared and refilled, keeping its capacity, so a caller
-    /// reading scan after scan allocates once. The bound is the same
-    /// [`Self::check_count`] a field-at-a-time loop applies, and a stream
-    /// that ends early reports the item that could not be completed, at the
-    /// offset that loop would have reached, so the error a truncated file
-    /// produces does not change.
-    pub(crate) fn read_items_into(
+    /// `buf` is a caller-owned scratch buffer: it grows to fit the largest
+    /// run it is asked for and is then written over, never cleared, so a
+    /// caller reading scan after scan neither allocates nor zeroes per scan.
+    /// Only `buf[..count * item_bytes]` is this run's data, which is what
+    /// comes back. The bound is the same [`Self::check_count`] a
+    /// field-at-a-time loop applies, and a stream that ends early reports
+    /// the item that could not be completed, at the offset that loop would
+    /// have reached, so the error a truncated file produces does not change.
+    pub(crate) fn read_items_into<'a>(
         &mut self,
-        buf: &mut Vec<u8>,
+        buf: &'a mut Vec<u8>,
         count: usize,
         item_bytes: usize,
-    ) -> Result<()> {
+    ) -> Result<&'a [u8]> {
         self.check_count(count as u64, item_bytes as u64)?;
         let total = count.saturating_mul(item_bytes);
-        buf.clear();
-        buf.resize(total, 0);
+        if buf.len() < total {
+            buf.resize(total, 0);
+        }
         let mut filled = 0;
         while filled < total {
-            match self.inner.read(&mut buf[filled..]) {
+            match self.inner.read(&mut buf[filled..total]) {
                 Ok(0) => {
                     // Stop where the loop would have: at the start of the
                     // first item it could not read whole.
                     let whole = filled - filled % item_bytes.max(1);
                     self.pos += whole as u64;
-                    buf.truncate(whole);
                     return Err(Error::UnexpectedEof {
                         offset: self.pos,
                         needed: item_bytes,
@@ -195,7 +198,7 @@ impl<R: Read + Seek> BinaryReader<R> {
             }
         }
         self.pos += total as u64;
-        Ok(())
+        Ok(&buf[..total])
     }
 
     pub fn read_u8(&mut self) -> Result<u8> {
@@ -487,15 +490,16 @@ mod tests {
     }
 
     #[test]
-    fn items_are_read_in_one_go_and_reuse_the_buffer() {
+    fn items_are_read_in_one_go_and_the_buffer_is_not_cleared() {
         let mut r = BinaryReader::at(counting(64), 0, 64);
         let mut buf = Vec::new();
-        r.read_items_into(&mut buf, 4, 8).unwrap();
-        assert_eq!(buf, vec![7u8; 32]);
+        assert_eq!(r.read_items_into(&mut buf, 4, 8).unwrap(), &[7u8; 32]);
         assert_eq!(r.position(), 32);
         let capacity = buf.capacity();
-        r.read_items_into(&mut buf, 2, 8).unwrap();
-        assert_eq!(buf.len(), 16);
+        // A smaller run writes over the front and returns only its own
+        // bytes; the buffer keeps its length, so nothing is zeroed again.
+        assert_eq!(r.read_items_into(&mut buf, 2, 8).unwrap().len(), 16);
+        assert_eq!(buf.len(), 32);
         assert_eq!(buf.capacity(), capacity, "the buffer should be reused");
         assert_eq!(r.inner.seeks, 0);
     }

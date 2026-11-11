@@ -1,5 +1,4 @@
 use crate::binary_reader::BinaryReader;
-use crate::bytes::{read_f32_le, read_f64_le};
 use crate::error::{Error, Result};
 use std::io::{Read, Seek, SeekFrom};
 
@@ -154,15 +153,26 @@ impl ScanDataPacket {
         let item_size = if wide_mz { 12 } else { 8 };
         // The whole peak list in one read, then parsed from the bytes: a
         // field at a time is two reads per peak, around 2,400 per scan.
-        r.read_items_into(scratch, count, item_size)?;
+        let block = r.read_items_into(scratch, count, item_size)?;
         let mut peaks = Vec::with_capacity(count);
-        for item in scratch.chunks_exact(item_size) {
-            let (mz, abundance) = if wide_mz {
-                (read_f64_le(item, 0)?, read_f32_le(item, 8)?)
-            } else {
-                (f64::from(read_f32_le(item, 0)?), read_f32_le(item, 4)?)
-            };
-            peaks.push(Peak { mz, abundance });
+        // Each item is read at fixed offsets in a chunk of known length, so
+        // the bounds checks fold away and the loop is one load per field.
+        if wide_mz {
+            for item in block.chunks_exact(12) {
+                peaks.push(Peak {
+                    mz: f64::from_le_bytes([
+                        item[0], item[1], item[2], item[3], item[4], item[5], item[6], item[7],
+                    ]),
+                    abundance: f32::from_le_bytes([item[8], item[9], item[10], item[11]]),
+                });
+            }
+        } else {
+            for item in block.chunks_exact(8) {
+                peaks.push(Peak {
+                    mz: f64::from(f32::from_le_bytes([item[0], item[1], item[2], item[3]])),
+                    abundance: f32::from_le_bytes([item[4], item[5], item[6], item[7]]),
+                });
+            }
         }
         Ok(peaks)
     }
@@ -194,10 +204,10 @@ impl ScanDataPacket {
         // left untouched.
         let resolutions = if n_peaks > 0 && header.unknown_stream_size as usize == n_peaks + 1 {
             let _count = r.read_u32()?;
-            r.read_items_into(scratch, n_peaks, 4)?;
+            let block = r.read_items_into(scratch, n_peaks, 4)?;
             let mut res = Vec::with_capacity(n_peaks);
-            for item in scratch.chunks_exact(4) {
-                res.push(read_f32_le(item, 0)?);
+            for item in block.chunks_exact(4) {
+                res.push(f32::from_le_bytes([item[0], item[1], item[2], item[3]]));
             }
             res
         } else {
@@ -213,13 +223,13 @@ impl ScanDataPacket {
         // f32 nodes. Per-peak noise/baseline come from interpolating this at
         // the peak m/z (see `noise_at`).
         let node_count = header.triplet_stream_size / 3;
-        r.read_items_into(scratch, node_count as usize, 12)?;
+        let block = r.read_items_into(scratch, node_count as usize, 12)?;
         let mut noise_nodes = Vec::with_capacity(node_count as usize);
-        for item in scratch.chunks_exact(12) {
+        for item in block.chunks_exact(12) {
             noise_nodes.push(NoiseNode {
-                mz: read_f32_le(item, 0)?,
-                noise: read_f32_le(item, 4)?,
-                baseline: read_f32_le(item, 8)?,
+                mz: f32::from_le_bytes([item[0], item[1], item[2], item[3]]),
+                noise: f32::from_le_bytes([item[4], item[5], item[6], item[7]]),
+                baseline: f32::from_le_bytes([item[8], item[9], item[10], item[11]]),
             });
         }
         // Skip any trailing words if the stream size is not a multiple of 3.
@@ -307,10 +317,10 @@ impl Profile {
             let first_bin = r.read_u32()?;
             let chunk_nbins = r.read_u32()?;
             let fudge = if has_fudge { Some(r.read_f32()?) } else { None };
-            r.read_items_into(scratch, chunk_nbins as usize, 4)?;
+            let block = r.read_items_into(scratch, chunk_nbins as usize, 4)?;
             let mut signal = Vec::with_capacity(chunk_nbins as usize);
-            for item in scratch.chunks_exact(4) {
-                signal.push(read_f32_le(item, 0)?);
+            for item in block.chunks_exact(4) {
+                signal.push(f32::from_le_bytes([item[0], item[1], item[2], item[3]]));
             }
             chunks.push(ProfileChunk {
                 first_bin,
