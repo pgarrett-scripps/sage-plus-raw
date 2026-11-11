@@ -85,6 +85,11 @@ pub struct RawFileReader {
     pub version: u32,
     /// Number of scans.
     pub num_scans: u32,
+    /// Total length of the file in bytes, read once while opening it.
+    ///
+    /// Per-scan readers are built with this instead of asking the file its
+    /// length again, which costs a seek to the end and back per scan.
+    pub file_len: u64,
     /// Data stream base address (for computing absolute scan offsets).
     pub data_addr: u64,
     /// True if scan data uses flat-peak format (TSQ/SRM) instead of PacketHeader.
@@ -571,6 +576,7 @@ impl RawFileReader {
         };
         // All BinaryReader operations are complete; reclaim the underlying source so
         // it can be used for on-demand reads (e.g. Q3 window table from scan records).
+        let file_len = r.length()?;
         let mut source = r.into_inner();
         let detected = crate::device::DeviceFamily::detect_instrument(
             &metadata_window,
@@ -707,6 +713,7 @@ impl RawFileReader {
             inst_log,
             version,
             num_scans,
+            file_len,
             data_addr,
             flat_peaks,
             scan_format,
@@ -846,7 +853,7 @@ impl RawFileReader {
         // instead of panicking on overflow for a corrupt combination.
         let abs_offset = self.data_addr.saturating_add(entry.offset);
         source.seek(SeekFrom::Start(abs_offset))?;
-        let mut r = BinaryReader::new(source);
+        let mut r = BinaryReader::at(source, abs_offset, self.file_len);
         ScanDataPacket::read(&mut r)
     }
 
@@ -883,7 +890,7 @@ impl RawFileReader {
         // instead of panicking on overflow for a corrupt combination.
         let abs_offset = self.data_addr.saturating_add(entry.offset);
         source.seek(SeekFrom::Start(abs_offset))?;
-        let mut r = BinaryReader::new(source);
+        let mut r = BinaryReader::at(source, abs_offset, self.file_len);
         ScanDataPacket::read_skip_profile(&mut r)
     }
 
@@ -997,7 +1004,7 @@ impl RawFileReader {
                 // instead of panicking on overflow for a corrupt combination.
                 let abs_offset = self.data_addr.saturating_add(entry.offset);
                 source.seek(SeekFrom::Start(abs_offset))?;
-                let mut r = BinaryReader::new(source);
+                let mut r = BinaryReader::at(source, abs_offset, self.file_len);
                 ScanDataPacket::read_peaks_only(&mut r)
             }
             ScanDataFormat::FlatV63 => self.read_scan_flat(source, scan_number),

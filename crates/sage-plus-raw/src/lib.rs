@@ -19,7 +19,7 @@
 //! ```
 //!
 //! [`iter_spectra_from_path`] does the same from one owned handle, without
-//! opening the path twice; [`SpectrumReader`] adds reading a scan by index
+//! carrying a second one; [`SpectrumReader`] adds reading a scan by index
 //! and into caller-owned buffers.
 //!
 //! Strict extraction propagates unreadable scans. Invalid single peaks are

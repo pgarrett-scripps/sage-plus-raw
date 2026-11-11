@@ -7,6 +7,11 @@ use crate::error::{Error, Result};
 pub(crate) struct BinaryReader<R> {
     inner: R,
     pos: u64,
+    /// True offset in the underlying stream that `pos == 0` means, when the
+    /// caller knew it. `None` means it has to be asked for. Kept separate
+    /// from `pos` so reported error offsets stay relative to where this
+    /// reader started, as they have always been.
+    base: Option<u64>,
     /// Cached total stream length, populated on first call to [`Self::length`]
     /// or [`Self::remaining`]. The underlying stream is never written to
     /// while parsing, so this is safe to cache for the reader's lifetime and
@@ -20,7 +25,24 @@ impl<R: Read + Seek> BinaryReader<R> {
         Self {
             inner,
             pos: 0,
+            base: None,
             total_len: None,
+        }
+    }
+
+    /// Like [`Self::new`], but told where in the stream it starts and how
+    /// long the stream is, so bounded reads can check what is left without
+    /// asking the stream anything.
+    ///
+    /// [`Self::new`] has to ask: it seeks to the end and back for the
+    /// length, then asks the position again for every bounded read. A reader
+    /// built per scan pays all of that per scan.
+    pub fn at(inner: R, base: u64, total_len: u64) -> Self {
+        Self {
+            inner,
+            pos: 0,
+            base: Some(base),
+            total_len: Some(total_len),
         }
     }
 
@@ -36,6 +58,9 @@ impl<R: Read + Seek> BinaryReader<R> {
     pub fn seek_to(&mut self, offset: u64) -> Result<()> {
         self.inner.seek(SeekFrom::Start(offset))?;
         self.pos = offset;
+        // `pos` now counts from the start of the stream, not from where this
+        // reader began, so a recorded base no longer describes it.
+        self.base = None;
         Ok(())
     }
 
@@ -99,6 +124,9 @@ impl<R: Read + Seek> BinaryReader<R> {
 
     /// Bytes remaining between the stream's true current position and its end.
     pub(crate) fn remaining(&mut self) -> Result<u64> {
+        if let (Some(base), Some(end)) = (self.base, self.total_len) {
+            return Ok(end.saturating_sub(base.saturating_add(self.pos)));
+        }
         let cur = self.inner.stream_position()?;
         let end = self.length()?;
         Ok(end.saturating_sub(cur))
@@ -353,6 +381,67 @@ mod tests {
         assert!(matches!(r.read_utf16_fixed(8), Err(Error::InvalidUtf16(0))));
         let mut r = BinaryReader::new(Cursor::new(bytes));
         assert_eq!(r.read_utf16_fixed_lossy(8).unwrap(), "A\u{FFFD}B");
+    }
+
+    /// A `Cursor` that counts the seeks reaching it.
+    struct CountingCursor {
+        inner: Cursor<Vec<u8>>,
+        seeks: u32,
+    }
+
+    impl Read for CountingCursor {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.inner.read(buf)
+        }
+    }
+
+    impl Seek for CountingCursor {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.seeks += 1;
+            self.inner.seek(pos)
+        }
+    }
+
+    fn counting(len: usize) -> CountingCursor {
+        CountingCursor {
+            inner: Cursor::new(vec![7u8; len]),
+            seeks: 0,
+        }
+    }
+
+    #[test]
+    fn a_known_start_and_length_save_every_seek() {
+        // What a per-scan reader pays for: each bounded read asks the stream
+        // how long it is and where it is, which is a seek either way.
+        let mut asked = BinaryReader::new(counting(64));
+        assert_eq!(asked.read_bytes(4).unwrap().len(), 4);
+        assert!(asked.inner.seeks > 0, "new() has to ask the stream");
+        assert_eq!(asked.length().unwrap(), 64);
+
+        let mut told = BinaryReader::at(counting(64), 0, 64);
+        assert_eq!(told.length().unwrap(), 64);
+        assert_eq!(told.read_bytes(4).unwrap().len(), 4);
+        assert_eq!(told.position(), 4);
+        assert_eq!(told.inner.seeks, 0, "a known start and length need none");
+        // The cap on untrusted lengths still applies, and still counts from
+        // where this reader started.
+        assert!(told.read_bytes(1024).is_err());
+        assert_eq!(told.remaining().unwrap(), 60);
+    }
+
+    #[test]
+    fn a_reader_part_way_into_the_stream_knows_what_is_left() {
+        let mut source = counting(64);
+        source.seek(SeekFrom::Start(48)).unwrap();
+        let mut r = BinaryReader::at(source, 48, 64);
+        assert_eq!(r.remaining().unwrap(), 16);
+        assert!(r.read_bytes(24).is_err(), "only 16 bytes are left");
+        assert_eq!(r.read_bytes(16).unwrap().len(), 16);
+        assert_eq!(r.remaining().unwrap(), 0);
+        // Seeking makes the recorded start meaningless, so it is dropped and
+        // the stream is asked again.
+        r.seek_to(32).unwrap();
+        assert_eq!(r.remaining().unwrap(), 32);
     }
 
     #[test]
