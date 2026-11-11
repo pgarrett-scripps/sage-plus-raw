@@ -30,6 +30,8 @@
 /// - `ITMS + c NSI d Full ms2 467.1021@etd130.00 [50.0000-1415.0000]` (ETD)
 /// - `FTMS + c NSI d Full ms2 507.8661@etd@hcd25.00 [110.0000-1026.0000]` (EThcD)
 /// - `ITMS + c NSI d Full ms3 810.50 265.27 [100.0000-1000.0000]` (MS3)
+use std::fmt::Write as _;
+
 use crate::scan_event::ScanEvent;
 use crate::scan_index::ScanIndexEntry;
 use crate::types::{Activation, Analyzer, MsPower, ScanType};
@@ -77,6 +79,31 @@ pub fn build_filter(
     )
 }
 
+/// Build the same filter string as [`build_filter`] into `out`, reusing its
+/// allocation instead of returning a new `String`. `out` is cleared first.
+///
+/// For a loop over many scans this renders every filter into one buffer. The
+/// bytes written are exactly those [`build_filter`] returns.
+pub fn build_filter_into(
+    event: &ScanEvent,
+    index_entry: &ScanIndexEntry,
+    precursor_mz: Option<f64>,
+    activation_energy: Option<f64>,
+    supplemental_energy: Option<f64>,
+    out: &mut String,
+) {
+    build_filter_with_activation_into(
+        event,
+        index_entry,
+        precursor_mz,
+        activation_energy,
+        supplemental_energy,
+        None,
+        None,
+        out,
+    )
+}
+
 /// Build a filter with a qualified activation and an explicitly sourced
 /// source-CID energy. Zero does not establish that source CID is off, so it
 /// is omitted rather than rendered as `!sid`.
@@ -90,6 +117,36 @@ pub(crate) fn build_filter_with_activation(
     source_cid_energy_ev: Option<f64>,
 ) -> String {
     let mut out = String::with_capacity(96);
+    build_filter_with_activation_into(
+        event,
+        index_entry,
+        precursor_mz,
+        activation_energy,
+        supplemental_energy,
+        activation,
+        source_cid_energy_ev,
+        &mut out,
+    );
+    out
+}
+
+/// Render [`build_filter_with_activation`] into `out`, which is cleared
+/// first, so a caller rendering many scans keeps one buffer.
+///
+/// Every field is written straight into `out`: a `write!` into a `String`
+/// cannot fail, so the `Result` is discarded rather than unwrapped.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_filter_with_activation_into(
+    event: &ScanEvent,
+    index_entry: &ScanIndexEntry,
+    precursor_mz: Option<f64>,
+    activation_energy: Option<f64>,
+    supplemental_energy: Option<f64>,
+    activation: Option<Activation>,
+    source_cid_energy_ev: Option<f64>,
+    out: &mut String,
+) {
+    out.clear();
     let p = &event.preamble;
     let analyzer = p.analyzer();
 
@@ -123,7 +180,7 @@ pub(crate) fn build_filter_with_activation(
 
     // Source CID follows the ionization tokens in the public filter grammar.
     if let Some(energy) = source_cid_energy_ev.filter(|e| e.is_finite() && *e > 0.0) {
-        out.push_str(&format!("sid={energy:.2} "));
+        let _ = write!(out, "sid={energy:.2} ");
     }
 
     // Dependent-scan flag
@@ -158,26 +215,26 @@ pub(crate) fn build_filter_with_activation(
     if n == 1 {
         out.push_str("ms");
     } else {
-        out.push_str(&format!("ms{n}"));
+        let _ = write!(out, "ms{n}");
     }
 
     // Preserve reaction targets without inferring energy units or method chains.
     if n >= 2 {
-        let masses: Vec<f64> = if event.reactions.is_empty() {
-            precursor_mz.into_iter().collect()
-        } else {
-            event
-                .reactions
-                .iter()
-                .map(|reaction| reaction.precursor_mz)
-                .collect()
-        };
+        // Reactions when the event has them, otherwise the single fallback
+        // precursor; iterated rather than collected, to keep the render
+        // allocation-free.
+        let no_reactions = event.reactions.is_empty();
+        let masses = event
+            .reactions
+            .iter()
+            .map(|reaction| reaction.precursor_mz)
+            .chain(precursor_mz.filter(|_| no_reactions));
         for mz in masses {
             if !mz.is_finite() || mz <= 0.0 {
                 continue;
             }
             out.push(' ');
-            out.push_str(&format!("{mz:.4}"));
+            let _ = write!(out, "{mz:.4}");
             let usable = |value: &f64| value.is_finite() && *value > 0.0;
             match activation {
                 // EThcD is written as two activation clauses. The
@@ -191,14 +248,14 @@ pub(crate) fn build_filter_with_activation(
                         .filter(usable)
                         .or_else(|| activation_energy.filter(usable))
                     {
-                        out.push_str(&format!("{energy:.2}"));
+                        let _ = write!(out, "{energy:.2}");
                     }
                 }
                 Some(method) => {
                     out.push('@');
                     out.push_str(method.as_str());
                     if let Some(energy) = activation_energy.filter(usable) {
-                        out.push_str(&format!("{energy:.2}"));
+                        let _ = write!(out, "{energy:.2}");
                     }
                 }
                 None => {}
@@ -213,18 +270,17 @@ pub(crate) fn build_filter_with_activation(
         && index_entry.high_mz > index_entry.low_mz
     {
         out.push(' ');
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "[{:.4}-{:.4}]",
             index_entry.low_mz, index_entry.high_mz
-        ));
+        );
     } else if let Some(fc) = event.fraction_collectors.first() {
         if fc.low_mz > 0.0 && fc.high_mz > fc.low_mz {
             out.push(' ');
-            out.push_str(&format!("[{:.4}-{:.4}]", fc.low_mz, fc.high_mz));
+            let _ = write!(out, "[{:.4}-{:.4}]", fc.low_mz, fc.high_mz);
         }
     }
-
-    out
 }
 
 #[cfg(test)]
@@ -573,6 +629,211 @@ mod tests {
                 "ITMS + c NSI d Full ms2 507.8661 [110.0000-1026.0000]"
             );
             assert_eq!(render(flag, 11, 4), render(0, 11, 4));
+        }
+    }
+
+    /// `(event, index entry, precursor, energy, supplemental, activation, sid)`
+    /// for one scan of every shape the renderer branches on: an MS1 with only
+    /// a collector range, a dependent FTMS MS2 with a qualified HCD clause, an
+    /// ITMS MS3 chain, EThcD's two clauses, and a source-CID scan whose
+    /// precursor comes from the fallback rather than a reaction.
+    #[allow(clippy::type_complexity)]
+    fn renderer_cases() -> Vec<(
+        ScanEvent,
+        ScanIndexEntry,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<Activation>,
+        Option<f64>,
+    )> {
+        let reaction = |precursor_mz: f64| Reaction {
+            precursor_mz,
+            unknown_double: 1.0,
+            energy: 35.0,
+            unknown_long1: 0,
+            unknown_long2: 0,
+        };
+        let collector = |low_mz: f64, high_mz: f64| FractionCollector { low_mz, high_mz };
+
+        let ms1 = ScanEvent {
+            preamble: make_preamble(1, 1, 1, 0),
+            reactions: vec![],
+            fraction_collectors: vec![collector(350.0, 1500.0)],
+            coefficients: vec![],
+        };
+
+        let mut pre = make_preamble(1, 0, 2, 0);
+        pre.bytes[10] = 1; // dependent
+        pre.bytes[24] = 1; // HCD
+        let ms2 = ScanEvent {
+            preamble: pre,
+            reactions: vec![reaction(645.8311)],
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        };
+
+        let mut pre = make_preamble(1, 0, 3, 0);
+        pre.bytes[10] = 1;
+        pre.bytes[24] = 4; // CID
+        pre.bytes[40] = 0; // ITMS
+        let ms3 = ScanEvent {
+            preamble: pre,
+            reactions: vec![reaction(810.50), reaction(265.27)],
+            fraction_collectors: vec![collector(100.0, 1000.0)],
+            coefficients: vec![],
+        };
+
+        let mut pre = make_preamble(1, 0, 2, 0);
+        pre.bytes[10] = 1;
+        pre.bytes[24] = 4;
+        pre.bytes[120] = 1; // electron transfer
+        let ethcd = ScanEvent {
+            preamble: pre,
+            reactions: vec![reaction(507.8661), reaction(0.0)],
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        };
+
+        let mut pre = make_preamble(0, 0, 2, 2); // negative, SIM
+        pre.bytes[11] = 4; // APCI
+        let fallback = ScanEvent {
+            preamble: pre,
+            reactions: vec![],
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        };
+
+        vec![
+            (ms1, make_index(350.0, 1500.0), None, None, None, None, None),
+            (
+                ms2,
+                make_index(150.0, 2000.0),
+                Some(645.8311),
+                Some(28.0),
+                None,
+                Some(Activation::HCD),
+                None,
+            ),
+            (
+                ms3,
+                make_index(100.0, 1000.0),
+                Some(265.27),
+                Some(35.0),
+                None,
+                Some(Activation::CID),
+                None,
+            ),
+            (
+                ethcd,
+                make_index(110.0, 1026.0),
+                Some(507.8661),
+                Some(30.0),
+                Some(25.0),
+                Some(Activation::EThcD),
+                None,
+            ),
+            (
+                fallback,
+                make_index(f64::NAN, f64::NAN),
+                Some(500.0),
+                Some(12.0),
+                None,
+                None,
+                Some(20.0),
+            ),
+        ]
+    }
+
+    #[test]
+    fn rendering_into_a_buffer_matches_the_owned_string() {
+        for (event, index_entry, precursor, energy, supplemental, activation, sid) in
+            renderer_cases()
+        {
+            let mut out = String::new();
+            build_filter_with_activation_into(
+                &event,
+                &index_entry,
+                precursor,
+                energy,
+                supplemental,
+                activation,
+                sid,
+                &mut out,
+            );
+            assert_eq!(
+                out,
+                build_filter_with_activation(
+                    &event,
+                    &index_entry,
+                    precursor,
+                    energy,
+                    supplemental,
+                    activation,
+                    sid,
+                )
+            );
+
+            let mut public = String::new();
+            build_filter_into(
+                &event,
+                &index_entry,
+                precursor,
+                energy,
+                supplemental,
+                &mut public,
+            );
+            assert_eq!(
+                public,
+                build_filter(&event, &index_entry, precursor, energy, supplemental)
+            );
+        }
+    }
+
+    #[test]
+    fn one_buffer_renders_every_scan_without_reallocating() {
+        let cases = renderer_cases();
+        // Longest first, so every later render fits the capacity it leaves.
+        let mut expected: Vec<String> = cases
+            .iter()
+            .map(
+                |(event, index_entry, precursor, energy, supplemental, activation, sid)| {
+                    build_filter_with_activation(
+                        event,
+                        index_entry,
+                        *precursor,
+                        *energy,
+                        *supplemental,
+                        *activation,
+                        *sid,
+                    )
+                },
+            )
+            .collect();
+        let longest = expected
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, filter)| filter.len())
+            .map(|(i, _)| i)
+            .unwrap();
+        let mut out = String::with_capacity(expected[longest].len());
+        let capacity = out.capacity();
+        for (i, (event, index_entry, precursor, energy, supplemental, activation, sid)) in
+            cases.iter().enumerate()
+        {
+            build_filter_with_activation_into(
+                event,
+                index_entry,
+                *precursor,
+                *energy,
+                *supplemental,
+                *activation,
+                *sid,
+                &mut out,
+            );
+            // No leftover bytes from the previous, longer scan.
+            assert_eq!(out, std::mem::take(&mut expected[i]));
+            assert_eq!(out.capacity(), capacity);
         }
     }
 }

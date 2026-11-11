@@ -58,7 +58,7 @@ pub use metadata::{ScanParams, StatusLogEntry};
 pub use reader::{ControllerInfo, ControllerType, RawFileReader};
 pub use scan_format::ScanDataFormat;
 pub use spectrum::{
-    scan_metadata, try_extract_spectrum, try_extract_spectrum_arrays, try_iter_spectra,
-    PrecursorInfo, ScanMetadata, SpectrumArrays, SpectrumRecord,
+    scan_metadata, try_extract_spectrum, try_extract_spectrum_arrays, try_extract_spectrum_into,
+    try_iter_spectra, PrecursorInfo, ScanMetadata, SpectrumArrays, SpectrumHeader, SpectrumRecord,
 };
 pub use types::*;

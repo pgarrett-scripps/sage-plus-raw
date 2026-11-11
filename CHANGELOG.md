@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `try_extract_spectrum_into` decodes a scan into caller-owned m/z and intensity buffers and returns the rest as a `SpectrumHeader`, which `SpectrumHeader::into_record` rejoins with the arrays, so a loop over a file allocates its peak arrays once instead of once per scan. `try_extract_spectrum` and `try_extract_spectrum_arrays` keep their signatures and now share that path; peaks are validated as the buffers fill rather than in a pass afterwards.
+- `RawFileReader::scan_filter_into` and `scan_filter::build_filter_into` render a scan filter into a caller-owned `String`, and the renderer writes each field directly into it instead of building a temporary `String` per field and a `Vec` of reaction masses per scan. The rendered bytes are unchanged.
+
 ## [0.1.1] - 2026-11-09
 
 - A trailer string with invalid UTF-16 (an unpaired surrogate) is decoded lossily instead of failing the whole file (upstream 9cb8b02).

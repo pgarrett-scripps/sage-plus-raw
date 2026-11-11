@@ -316,36 +316,86 @@ pub fn try_extract_spectrum<R: Read + Seek>(
     idx: u32,
     include_profile: bool,
 ) -> Result<SpectrumRecord> {
-    let DecodedSpectrum {
-        metadata: meta,
-        mz,
-        intensity,
-        scan_mode,
-        dropped_peaks,
-    } = decode_spectrum(raw, source, idx, include_profile)?;
-    Ok(SpectrumRecord {
-        index: meta.index,
-        scan_number: meta.scan_number,
-        ms_level: meta.ms_level,
-        is_ms1: meta.is_ms1,
-        is_dia: meta.is_dia,
-        is_wideband: meta.is_wideband,
-        polarity: meta.polarity,
-        scan_mode,
-        filter: meta.filter,
-        retention_time_min: meta.retention_time_min,
-        total_ion_current: meta.total_ion_current,
-        base_peak_mz: meta.base_peak_mz,
-        base_peak_intensity: meta.base_peak_intensity,
-        low_mz: meta.low_mz,
-        high_mz: meta.high_mz,
-        ion_injection_time_ms: meta.ion_injection_time_ms,
-        faims_cv: meta.faims_cv,
-        precursor: meta.precursor,
-        mz,
-        intensity,
-        dropped_peaks,
-    })
+    let mut mz = Vec::new();
+    let mut intensity = Vec::new();
+    let header =
+        try_extract_spectrum_into(raw, source, idx, include_profile, &mut mz, &mut intensity)?;
+    Ok(header.into_record(mz, intensity))
+}
+
+/// Everything [`try_extract_spectrum_into`] decodes besides the peak arrays:
+/// the scan's metadata, the scan mode the arrays are actually in and how many
+/// peaks were dropped. The arrays themselves go to the caller's buffers.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct SpectrumHeader {
+    pub metadata: ScanMetadata,
+    /// Effective scan mode after `include_profile` resolution.
+    pub scan_mode: Option<crate::ScanMode>,
+    /// Peaks dropped because their m/z was not finite and positive or their
+    /// intensity was not finite or overflowed f32.
+    pub dropped_peaks: usize,
+}
+
+impl SpectrumHeader {
+    /// Rejoin this header with the arrays it was decoded into, giving the
+    /// [`SpectrumRecord`] [`try_extract_spectrum`] would have returned.
+    pub fn into_record(self, mz: Vec<f64>, intensity: Vec<f32>) -> SpectrumRecord {
+        let meta = self.metadata;
+        SpectrumRecord {
+            index: meta.index,
+            scan_number: meta.scan_number,
+            ms_level: meta.ms_level,
+            is_ms1: meta.is_ms1,
+            is_dia: meta.is_dia,
+            is_wideband: meta.is_wideband,
+            polarity: meta.polarity,
+            scan_mode: self.scan_mode,
+            filter: meta.filter,
+            retention_time_min: meta.retention_time_min,
+            total_ion_current: meta.total_ion_current,
+            base_peak_mz: meta.base_peak_mz,
+            base_peak_intensity: meta.base_peak_intensity,
+            low_mz: meta.low_mz,
+            high_mz: meta.high_mz,
+            ion_injection_time_ms: meta.ion_injection_time_ms,
+            faims_cv: meta.faims_cv,
+            precursor: meta.precursor,
+            mz,
+            intensity,
+            dropped_peaks: self.dropped_peaks,
+        }
+    }
+}
+
+/// Decode the scan at scan-index `idx` into caller-owned buffers, so a loop
+/// over many scans allocates its peak arrays once instead of once per scan.
+///
+/// `mz` and `intensity` are cleared and refilled, keeping their capacity;
+/// both are left empty on an error. Everything else the scan decodes to is
+/// returned as a [`SpectrumHeader`], which
+/// [`SpectrumHeader::into_record`] rejoins with the arrays. The values are
+/// exactly those [`try_extract_spectrum`] produces for the same arguments.
+pub fn try_extract_spectrum_into<R: Read + Seek>(
+    raw: &RawFileReader,
+    source: &mut R,
+    idx: u32,
+    include_profile: bool,
+    mz: &mut Vec<f64>,
+    intensity: &mut Vec<f32>,
+) -> Result<SpectrumHeader> {
+    match fill_arrays(raw, source, idx, include_profile, mz, intensity) {
+        Ok((metadata, scan_mode, dropped_peaks)) => Ok(SpectrumHeader {
+            metadata,
+            scan_mode,
+            dropped_peaks,
+        }),
+        Err(error) => {
+            mz.clear();
+            intensity.clear();
+            Err(error.with_context(decode_context(raw, idx)))
+        }
+    }
 }
 
 /// Iterate all scans without dropping failures. Each result corresponds to
@@ -356,15 +406,6 @@ pub fn try_iter_spectra<'a, R: Read + Seek>(
     include_profile: bool,
 ) -> impl Iterator<Item = Result<SpectrumRecord>> + 'a {
     (0..raw.num_scans).map(move |idx| try_extract_spectrum(raw, source, idx, include_profile))
-}
-
-/// A scan's metadata, its peak arrays and the scan mode those arrays are in.
-pub(crate) struct DecodedSpectrum {
-    pub(crate) metadata: ScanMetadata,
-    pub(crate) mz: Vec<f64>,
-    pub(crate) intensity: Vec<f32>,
-    pub(crate) scan_mode: Option<crate::ScanMode>,
-    pub(crate) dropped_peaks: usize,
 }
 
 /// Strict arrays with full profile precision, before narrowing to f32 for
@@ -405,28 +446,6 @@ fn decode_context(raw: &RawFileReader, idx: u32) -> crate::ErrorContext {
     context
 }
 
-pub(crate) fn decode_spectrum<R: Read + Seek>(
-    raw: &RawFileReader,
-    source: &mut R,
-    idx: u32,
-    include_profile: bool,
-) -> Result<DecodedSpectrum> {
-    let arrays = try_extract_spectrum_arrays(raw, source, idx, include_profile)?;
-    // Every intensity fits f32: decode_arrays drops peaks that overflow it.
-    let intensity: Vec<f32> = arrays
-        .intensity
-        .into_iter()
-        .map(|value| value as f32)
-        .collect();
-    Ok(DecodedSpectrum {
-        metadata: arrays.metadata,
-        mz: arrays.mz,
-        intensity,
-        scan_mode: arrays.scan_mode,
-        dropped_peaks: arrays.dropped_peaks,
-    })
-}
-
 pub(crate) fn validate_scan_event(raw: &RawFileReader, idx: u32) -> Result<()> {
     if !raw.flat_peaks {
         let event = raw
@@ -454,17 +473,12 @@ fn decode_arrays<R: Read + Seek>(
     idx: u32,
     include_profile: bool,
 ) -> Result<SpectrumArrays> {
-    let meta = scan_metadata(raw, idx).ok_or(crate::Error::InvalidScanIndex(idx))?;
-    validate_scan_event(raw, idx)?;
-    let event = raw.scan_events.get(idx as usize);
-    let (mut mz, mut intensity, scan_mode) =
-        resolve_scan_arrays(raw, source, meta.scan_number, include_profile, event)?;
-    if mz.len() != intensity.len() {
-        return Err(crate::Error::CorruptData("invalid decoded peak arrays"));
-    }
-    let dropped_peaks = drop_invalid_peaks(&mut mz, &mut intensity);
+    let mut mz = Vec::new();
+    let mut intensity = Vec::new();
+    let (metadata, scan_mode, dropped_peaks) =
+        fill_arrays(raw, source, idx, include_profile, &mut mz, &mut intensity)?;
     Ok(SpectrumArrays {
-        metadata: meta,
+        metadata,
         mz,
         intensity,
         scan_mode,
@@ -472,26 +486,75 @@ fn decode_arrays<R: Read + Seek>(
     })
 }
 
+/// Decode one scan's metadata and peaks, filling `mz` and `intensity`, which
+/// are cleared first and keep their capacity. Returns the metadata, the scan
+/// mode the arrays are in and how many peaks were dropped.
+fn fill_arrays<R: Read + Seek, I: PeakIntensity>(
+    raw: &RawFileReader,
+    source: &mut R,
+    idx: u32,
+    include_profile: bool,
+    mz: &mut Vec<f64>,
+    intensity: &mut Vec<I>,
+) -> Result<(ScanMetadata, Option<crate::ScanMode>, usize)> {
+    let meta = scan_metadata(raw, idx).ok_or(crate::Error::InvalidScanIndex(idx))?;
+    validate_scan_event(raw, idx)?;
+    let event = raw.scan_events.get(idx as usize);
+    mz.clear();
+    intensity.clear();
+    let (scan_mode, dropped_peaks) = fill_scan_arrays(
+        raw,
+        source,
+        meta.scan_number,
+        include_profile,
+        event,
+        mz,
+        intensity,
+    )?;
+    Ok((meta, scan_mode, dropped_peaks))
+}
+
 fn valid_peak(mz: f64, intensity: f64) -> bool {
     mz.is_finite() && mz > 0.0 && intensity.is_finite() && (intensity as f32).is_finite()
 }
 
-/// Remove peaks whose m/z is not finite and positive or whose intensity is
-/// not finite or overflows f32, so one bad peak does not cost the scan.
-/// Returns how many were removed.
-fn drop_invalid_peaks(mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> usize {
-    let before = mz.len();
-    let mut keep = 0;
-    for i in 0..before {
-        if valid_peak(mz[i], intensity[i]) {
-            mz[keep] = mz[i];
-            intensity[keep] = intensity[i];
-            keep += 1;
+/// How a validated intensity is stored: `f32` for [`SpectrumRecord`], `f64`
+/// for [`SpectrumArrays`]. Only values that pass [`valid_peak`] are stored,
+/// so narrowing to f32 never overflows.
+trait PeakIntensity: Copy {
+    fn from_decoded(value: f64) -> Self;
+}
+
+impl PeakIntensity for f64 {
+    fn from_decoded(value: f64) -> Self {
+        value
+    }
+}
+
+impl PeakIntensity for f32 {
+    fn from_decoded(value: f64) -> Self {
+        value as f32
+    }
+}
+
+/// Append `peaks` to `mz` and `intensity`, skipping those whose m/z is not
+/// finite and positive or whose intensity is not finite or overflows f32, so
+/// one bad peak does not cost the scan. Returns how many were skipped.
+fn extend_valid_peaks<I: PeakIntensity>(
+    peaks: impl Iterator<Item = (f64, f64)>,
+    mz: &mut Vec<f64>,
+    intensity: &mut Vec<I>,
+) -> usize {
+    let mut dropped = 0;
+    for (peak_mz, peak_intensity) in peaks {
+        if valid_peak(peak_mz, peak_intensity) {
+            mz.push(peak_mz);
+            intensity.push(I::from_decoded(peak_intensity));
+        } else {
+            dropped += 1;
         }
     }
-    mz.truncate(keep);
-    intensity.truncate(keep);
-    before - keep
+    dropped
 }
 
 fn ms_level(power: MsPower) -> u32 {
@@ -522,59 +585,115 @@ fn validate_profile_calibration(coeffs: &[f64], analyzer: Option<crate::Analyzer
     Ok(())
 }
 
-/// Resolve the m/z and intensity arrays for a single scan.
+/// Fill the m/z and intensity arrays for a single scan, appending to `mz`
+/// and `intensity`.
 ///
 /// When `include_profile=true` AND the scan packet contains profile data, the
-/// profile signal is decoded and returned as the primary arrays (with
+/// profile signal is decoded and stored as the primary arrays (with
 /// `effective_scan_mode = Some(ScanMode::Profile)`). Otherwise the centroid
 /// peak list is used.
 ///
-/// Returns an error when the scan cannot be read.
-fn resolve_scan_arrays<R: Read + Seek>(
+/// Returns the scan mode of the stored arrays and how many peaks were
+/// dropped, or an error when the scan cannot be read.
+fn fill_scan_arrays<R: Read + Seek, I: PeakIntensity>(
     raw: &RawFileReader,
     source: &mut R,
     scan_number: u32,
     include_profile: bool,
     event: Option<&ScanEvent>,
-) -> Result<(Vec<f64>, Vec<f64>, Option<crate::ScanMode>)> {
+    mz: &mut Vec<f64>,
+    intensity: &mut Vec<I>,
+) -> Result<(Option<crate::ScanMode>, usize)> {
     if include_profile && !raw.flat_peaks {
         let packet = raw.read_scan(source, scan_number)?;
         if let Some(profile) = packet.profile {
             let coeffs = event.map(|e| e.coefficients.as_slice()).unwrap_or(&[]);
             validate_profile_calibration(coeffs, event.and_then(|e| e.preamble.analyzer()))?;
-            let pairs = profile.to_mz_intensity(coeffs);
-            let (mz, int) = pairs.into_iter().unzip();
-            return Ok((mz, int, Some(crate::ScanMode::Profile)));
+            mz.reserve(profile.signal_len());
+            intensity.reserve(profile.signal_len());
+            let dropped = extend_valid_peaks(profile.mz_intensity_iter(coeffs), mz, intensity);
+            return Ok((Some(crate::ScanMode::Profile), dropped));
         }
-        let mz: Vec<f64> = packet.peaks.iter().map(|p| p.mz).collect();
-        let int: Vec<f64> = packet
-            .peaks
-            .iter()
-            .map(|p| f64::from(p.abundance))
-            .collect();
-        return Ok((mz, int, Some(crate::ScanMode::Centroid)));
+        let dropped = extend_valid_peaks(
+            packet.peaks.iter().map(|p| (p.mz, f64::from(p.abundance))),
+            mz,
+            intensity,
+        );
+        return Ok((Some(crate::ScanMode::Centroid), dropped));
     }
     let peaks = raw.read_peaks_only(source, scan_number)?;
-    let mz: Vec<f64> = peaks.iter().map(|p| p.mz).collect();
-    let int: Vec<f64> = peaks.iter().map(|p| f64::from(p.abundance)).collect();
-    Ok((mz, int, Some(crate::ScanMode::Centroid)))
+    let dropped = extend_valid_peaks(
+        peaks.iter().map(|p| (p.mz, f64::from(p.abundance))),
+        mz,
+        intensity,
+    );
+    Ok((Some(crate::ScanMode::Centroid), dropped))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const MIXED_PEAKS: [(f64, f64); 7] = [
+        (100.0, 1.0),
+        (-1.0, 2.0),
+        (0.0, 3.0),
+        (f64::NAN, 4.0),
+        (200.0, f64::NAN),
+        (300.0, 1e300),
+        (f64::INFINITY, 5.0),
+    ];
+
     #[test]
     fn invalid_peaks_are_dropped_not_the_scan() {
-        let mut mz = vec![100.0, -1.0, 0.0, f64::NAN, 200.0, 300.0, f64::INFINITY];
-        let mut intensity = vec![1.0, 2.0, 3.0, 4.0, f64::NAN, 1e300, 5.0];
-        assert_eq!(drop_invalid_peaks(&mut mz, &mut intensity), 6);
+        let mut mz = Vec::new();
+        let mut intensity: Vec<f64> = Vec::new();
+        let dropped = extend_valid_peaks(MIXED_PEAKS.into_iter(), &mut mz, &mut intensity);
+        assert_eq!(dropped, 6);
         assert_eq!(mz, [100.0]);
         assert_eq!(intensity, [1.0]);
-        let mut mz = vec![100.0, 200.0];
-        let mut intensity = vec![0.0, 1.0];
-        assert_eq!(drop_invalid_peaks(&mut mz, &mut intensity), 0);
+        let mut mz = Vec::new();
+        let mut intensity: Vec<f64> = Vec::new();
+        let valid = [(100.0, 0.0), (200.0, 1.0)];
+        assert_eq!(
+            extend_valid_peaks(valid.into_iter(), &mut mz, &mut intensity),
+            0
+        );
         assert_eq!(mz.len(), 2);
+    }
+
+    #[test]
+    fn narrowed_and_full_precision_fills_keep_the_same_peaks() {
+        // The record path stores f32 intensities and the arrays path f64;
+        // both must keep and drop exactly the same peaks.
+        let peaks = [(100.0, 1.5), (-1.0, 2.0), (200.0, 1e300), (300.0, 2.5)];
+        let mut wide_mz = Vec::new();
+        let mut wide: Vec<f64> = Vec::new();
+        let mut narrow_mz = Vec::new();
+        let mut narrow: Vec<f32> = Vec::new();
+        let wide_dropped = extend_valid_peaks(peaks.into_iter(), &mut wide_mz, &mut wide);
+        let narrow_dropped = extend_valid_peaks(peaks.into_iter(), &mut narrow_mz, &mut narrow);
+        assert_eq!(wide_dropped, narrow_dropped);
+        assert_eq!(wide_mz, narrow_mz);
+        assert_eq!(wide.iter().map(|v| *v as f32).collect::<Vec<f32>>(), narrow);
+    }
+
+    #[test]
+    fn a_refilled_buffer_keeps_its_allocation() {
+        // What the into path relies on: clear() keeps capacity, so a second
+        // scan of the same size reuses the buffer instead of allocating.
+        let mut mz = Vec::new();
+        let mut intensity: Vec<f32> = Vec::new();
+        extend_valid_peaks(MIXED_PEAKS.into_iter(), &mut mz, &mut intensity);
+        mz.clear();
+        intensity.clear();
+        let capacity = (mz.capacity(), intensity.capacity());
+        assert!(capacity.0 > 0 && capacity.1 > 0);
+        let dropped = extend_valid_peaks(MIXED_PEAKS.into_iter(), &mut mz, &mut intensity);
+        assert_eq!(dropped, 6);
+        assert_eq!(mz, [100.0]);
+        assert_eq!(intensity, [1.0_f32]);
+        assert_eq!((mz.capacity(), intensity.capacity()), capacity);
     }
 
     #[test]

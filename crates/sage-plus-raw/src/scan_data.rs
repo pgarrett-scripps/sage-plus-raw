@@ -326,10 +326,25 @@ impl Profile {
         // an untrusted file-provided value not otherwise validated against
         // the real signal data, so using it directly here would reopen the
         // same unbounded-allocation issue the read-path checks close off.
-        let cap: usize = self.chunks.iter().map(|c| c.signal.len()).sum();
-        let mut result = Vec::with_capacity(cap);
-        for chunk in &self.chunks {
-            for (i, &intensity) in chunk.signal.iter().enumerate() {
+        let mut result = Vec::with_capacity(self.signal_len());
+        result.extend(self.mz_intensity_iter(coefficients));
+        result
+    }
+
+    /// Total parsed signal length across chunks: how many pairs
+    /// [`Self::mz_intensity_iter`] yields.
+    pub(crate) fn signal_len(&self) -> usize {
+        self.chunks.iter().map(|c| c.signal.len()).sum()
+    }
+
+    /// The same (m/z, intensity) pairs as [`Self::to_mz_intensity`], without
+    /// collecting them, for callers filling their own buffers.
+    pub(crate) fn mz_intensity_iter<'a>(
+        &'a self,
+        coefficients: &'a [f64],
+    ) -> impl Iterator<Item = (f64, f64)> + 'a {
+        self.chunks.iter().flat_map(move |chunk| {
+            chunk.signal.iter().enumerate().map(move |(i, &intensity)| {
                 let bin_global = chunk.first_bin as f64 + i as f64;
                 let freq = self.first_value + bin_global * self.step;
                 // The per-chunk fudge is an additive m/z correction applied
@@ -338,10 +353,9 @@ impl Profile {
                 // bins by ~1e-3 m/z relative to the centroid list (verified
                 // against centroids across Q Exactive / Exploris / Eclipse).
                 let mz = freq_to_mz(freq, coefficients) + chunk.fudge.unwrap_or(0.0) as f64;
-                result.push((mz, intensity as f64));
-            }
-        }
-        result
+                (mz, intensity as f64)
+            })
+        })
     }
 }
 

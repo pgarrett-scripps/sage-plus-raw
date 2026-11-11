@@ -1051,6 +1051,27 @@ impl RawFileReader {
     /// Activation clauses are included only for qualified v66 reaction tags.
     /// See [`crate::scan_filter`] for grammar details.
     pub fn scan_filter(&self, scan_number: u32) -> Option<String> {
+        let mut out = String::with_capacity(96);
+        self.scan_filter_into(scan_number, &mut out).then_some(out)
+    }
+
+    /// Render [`Self::scan_filter`] into `out`, reusing its allocation
+    /// instead of returning a new `String`, for a caller walking many scans.
+    ///
+    /// `out` is cleared first. Returns false, leaving `out` empty, when the
+    /// scan is out of range or an SRM scan has no stored windows; otherwise
+    /// the bytes written are exactly what [`Self::scan_filter`] returns.
+    pub fn scan_filter_into(&self, scan_number: u32, out: &mut String) -> bool {
+        out.clear();
+        if self.render_scan_filter(scan_number, out).is_none() {
+            out.clear();
+            return false;
+        }
+        true
+    }
+
+    fn render_scan_filter(&self, scan_number: u32, out: &mut String) -> Option<()> {
+        use std::fmt::Write as _;
         let first = self.run_header.sample_info.first_scan_number;
         let idx = scan_number.checked_sub(first)? as usize;
         let entry = self.scan_index.get(idx)?;
@@ -1067,19 +1088,21 @@ impl RawFileReader {
                 ScanDataFormat::FlatV63 => "NSI",
                 _ => "ESI",
             };
-            let mut s = format!("c {} SRM ms2 {:.3}", ionization, q1);
+            // Writing into a String cannot fail; the Result is discarded
+            // rather than unwrapped.
+            let _ = write!(out, "c {ionization} SRM ms2 {q1:.3}");
             if !windows.is_empty() {
-                s.push(' ');
-                s.push('[');
+                out.push(' ');
+                out.push('[');
                 for (i, (lo, hi)) in windows.iter().enumerate() {
                     if i > 0 {
-                        s.push_str(", ");
+                        out.push_str(", ");
                     }
-                    s.push_str(&format!("{:.3}-{:.3}", lo, hi));
+                    let _ = write!(out, "{lo:.3}-{hi:.3}");
                 }
-                s.push(']');
+                out.push(']');
             }
-            return Some(s);
+            return Some(());
         }
 
         let event = self.scan_events.get(idx)?;
@@ -1091,7 +1114,7 @@ impl RawFileReader {
         let supplemental = params
             .as_ref()
             .and_then(|p| p.supplemental_activation_energy());
-        Some(crate::scan_filter::build_filter_with_activation(
+        crate::scan_filter::build_filter_with_activation_into(
             event,
             entry,
             precursor,
@@ -1099,7 +1122,9 @@ impl RawFileReader {
             supplemental,
             event.qualified_activation(self.version),
             self.source_cid_energy_ev(scan_number),
-        ))
+            out,
+        );
+        Some(())
     }
 
     /// Source CID energy (eV) from this scan's trailer, or from its explicitly

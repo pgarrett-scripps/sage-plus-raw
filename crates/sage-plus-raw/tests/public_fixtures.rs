@@ -276,3 +276,72 @@ fn faims_requires_explicit_enablement_and_preserves_active_zero() {
         );
     }
 }
+
+/// Every acquisition in the public corpus, decoded twice: once per scan into
+/// a fresh record, once into two buffers reused across the whole file. The
+/// reused path must produce the identical record, filter string and error.
+#[test]
+#[ignore = "requires downloaded public fixtures, run by CI"]
+fn reused_buffers_decode_what_fresh_allocations_do() {
+    for name in [
+        "BSA-FT-ETD.raw",
+        "BSA-FT-HCD.raw",
+        "FT-HCD-MSX.raw",
+        "IT-HCD-SPS.raw",
+        "IsolationMzOffset-ReportedMassOffset.raw",
+        "source_cid_test_3scans.raw",
+    ] {
+        let path = fixture(name);
+        let raw = RawFileReader::open_path(&path).unwrap();
+        let mut mz = Vec::new();
+        let mut intensity = Vec::new();
+        let mut filter = String::new();
+        for include_profile in [false, true] {
+            let mut fresh = File::open(&path).unwrap();
+            let mut reused = File::open(&path).unwrap();
+            for idx in 0..raw.num_scans {
+                let expected =
+                    sage_plus_raw::try_extract_spectrum(&raw, &mut fresh, idx, include_profile);
+                let header = sage_plus_raw::try_extract_spectrum_into(
+                    &raw,
+                    &mut reused,
+                    idx,
+                    include_profile,
+                    &mut mz,
+                    &mut intensity,
+                );
+                match (expected, header) {
+                    (Ok(record), Ok(header)) => {
+                        assert_eq!(record.mz, mz, "{name} scan index {idx} m/z");
+                        assert_eq!(record.intensity, intensity, "{name} scan index {idx}");
+                        let rebuilt = header.into_record(mz.clone(), intensity.clone());
+                        assert_eq!(
+                            format!("{record:?}"),
+                            format!("{rebuilt:?}"),
+                            "{name} scan index {idx} record"
+                        );
+                    }
+                    (Err(expected), Err(found)) => {
+                        assert_eq!(expected.to_string(), found.to_string());
+                        assert!(mz.is_empty() && intensity.is_empty());
+                    }
+                    (expected, found) => {
+                        panic!("{name} scan index {idx}: {expected:?} vs {found:?}")
+                    }
+                }
+
+                let scan_number = raw.run_header.sample_info.first_scan_number + idx;
+                let rendered = raw.scan_filter_into(scan_number, &mut filter);
+                match raw.scan_filter(scan_number) {
+                    Some(owned) => {
+                        assert!(rendered, "{name} scan {scan_number}");
+                        assert_eq!(owned, filter, "{name} scan {scan_number} filter");
+                    }
+                    None => {
+                        assert!(!rendered && filter.is_empty(), "{name} scan {scan_number}");
+                    }
+                }
+            }
+        }
+    }
+}
