@@ -24,6 +24,11 @@ pub(crate) fn read_u32_le(bytes: &[u8], offset: usize) -> Result<u32> {
 }
 
 #[inline]
+pub(crate) fn read_f32_le(bytes: &[u8], offset: usize) -> Result<f32> {
+    Ok(f32::from_le_bytes(slice_at::<4>(bytes, offset)?))
+}
+
+#[inline]
 pub(crate) fn read_f64_le(bytes: &[u8], offset: usize) -> Result<f64> {
     Ok(f64::from_le_bytes(slice_at::<8>(bytes, offset)?))
 }
@@ -43,6 +48,15 @@ mod tests {
     fn read_u32_le_reads_at_nonzero_offset() {
         let bytes = [0xff, 0x01, 0x00, 0x00, 0x00];
         assert_eq!(read_u32_le(&bytes, 1).unwrap(), 1);
+    }
+
+    #[test]
+    fn read_f32_le_decodes_little_endian() {
+        assert_eq!(read_f32_le(&1.5f32.to_le_bytes(), 0).unwrap(), 1.5);
+        let mut bytes = vec![0xff];
+        bytes.extend_from_slice(&(-2.25f32).to_le_bytes());
+        assert_eq!(read_f32_le(&bytes, 1).unwrap(), -2.25);
+        assert!(read_f32_le(&bytes, 3).is_err());
     }
 
     #[test]

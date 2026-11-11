@@ -1,4 +1,5 @@
 use crate::binary_reader::BinaryReader;
+use crate::bytes::{read_f32_le, read_f64_le};
 use crate::error::{Error, Result};
 use std::io::{Read, Seek, SeekFrom};
 
@@ -69,18 +70,21 @@ pub struct ScanDataPacket {
 }
 
 impl ScanDataPacket {
-    pub(crate) fn read<R: Read + Seek>(r: &mut BinaryReader<R>) -> Result<Self> {
+    pub(crate) fn read<R: Read + Seek>(
+        r: &mut BinaryReader<R>,
+        scratch: &mut Vec<u8>,
+    ) -> Result<Self> {
         let header = PacketHeader::read(r)?;
 
         // Profile data
         let profile = if header.profile_size > 0 {
-            Some(Profile::read(r, header.layout)?)
+            Some(Profile::read(r, header.layout, scratch)?)
         } else {
             None
         };
 
-        let peaks = Self::read_peaks(r, &header)?;
-        let (resolutions, noise_nodes) = Self::read_labels(r, &header, peaks.len())?;
+        let peaks = Self::read_peaks(r, &header, scratch)?;
+        let (resolutions, noise_nodes) = Self::read_labels(r, &header, peaks.len(), scratch)?;
 
         Ok(Self {
             header,
@@ -94,15 +98,18 @@ impl ScanDataPacket {
     /// Read peaks and FT label data while skipping the (potentially large)
     /// profile signal. This is the fast path when only centroids and their
     /// labels (resolution / noise / baseline) are needed.
-    pub(crate) fn read_skip_profile<R: Read + Seek>(r: &mut BinaryReader<R>) -> Result<Self> {
+    pub(crate) fn read_skip_profile<R: Read + Seek>(
+        r: &mut BinaryReader<R>,
+        scratch: &mut Vec<u8>,
+    ) -> Result<Self> {
         let header = PacketHeader::read(r)?;
 
         if header.profile_size > 0 {
             r.skip((header.profile_size as usize) * 4)?;
         }
 
-        let peaks = Self::read_peaks(r, &header)?;
-        let (resolutions, noise_nodes) = Self::read_labels(r, &header, peaks.len())?;
+        let peaks = Self::read_peaks(r, &header, scratch)?;
+        let (resolutions, noise_nodes) = Self::read_labels(r, &header, peaks.len(), scratch)?;
 
         Ok(Self {
             header,
@@ -117,7 +124,10 @@ impl ScanDataPacket {
     /// trailing label streams. This is 2-10× faster than [`Self::read`] for
     /// high-resolution Orbitrap scans where profile_size can be tens of
     /// thousands of 4-byte words.
-    pub(crate) fn read_peaks_only<R: Read + Seek>(r: &mut BinaryReader<R>) -> Result<Vec<Peak>> {
+    pub(crate) fn read_peaks_only<R: Read + Seek>(
+        r: &mut BinaryReader<R>,
+        scratch: &mut Vec<u8>,
+    ) -> Result<Vec<Peak>> {
         let header = PacketHeader::read(r)?;
 
         // Skip profile data instead of decoding it.
@@ -125,7 +135,7 @@ impl ScanDataPacket {
             r.skip((header.profile_size as usize) * 4)?;
         }
 
-        Self::read_peaks(r, &header)
+        Self::read_peaks(r, &header, scratch)
     }
 
     /// Decode the centroid peak list. Assumes the cursor sits at the start of
@@ -133,23 +143,25 @@ impl ScanDataPacket {
     fn read_peaks<R: Read + Seek>(
         r: &mut BinaryReader<R>,
         header: &PacketHeader,
+        scratch: &mut Vec<u8>,
     ) -> Result<Vec<Peak>> {
         // Layout bit 16 (0x10000) means m/z is f64 instead of f32.
         let wide_mz = header.layout & 0x10000 != 0;
         if header.peak_list_size == 0 {
             return Ok(Vec::new());
         }
-        let count = r.read_u32()?;
-        let item_size: u64 = if wide_mz { 12 } else { 8 };
-        r.check_count(count as u64, item_size)?;
-        let mut peaks = Vec::with_capacity(count as usize);
-        for _ in 0..count {
-            let mz = if wide_mz {
-                r.read_f64()?
+        let count = r.read_u32()? as usize;
+        let item_size = if wide_mz { 12 } else { 8 };
+        // The whole peak list in one read, then parsed from the bytes: a
+        // field at a time is two reads per peak, around 2,400 per scan.
+        r.read_items_into(scratch, count, item_size)?;
+        let mut peaks = Vec::with_capacity(count);
+        for item in scratch.chunks_exact(item_size) {
+            let (mz, abundance) = if wide_mz {
+                (read_f64_le(item, 0)?, read_f32_le(item, 8)?)
             } else {
-                r.read_f32()? as f64
+                (f64::from(read_f32_le(item, 0)?), read_f32_le(item, 4)?)
             };
-            let abundance = r.read_f32()?;
             peaks.push(Peak { mz, abundance });
         }
         Ok(peaks)
@@ -163,6 +175,7 @@ impl ScanDataPacket {
         r: &mut BinaryReader<R>,
         header: &PacketHeader,
         n_peaks: usize,
+        scratch: &mut Vec<u8>,
     ) -> Result<(Vec<f32>, Vec<NoiseNode>)> {
         // Descriptor stream: one u32 per peak (a peak index), not label data.
         //
@@ -181,10 +194,10 @@ impl ScanDataPacket {
         // left untouched.
         let resolutions = if n_peaks > 0 && header.unknown_stream_size as usize == n_peaks + 1 {
             let _count = r.read_u32()?;
-            r.check_count(n_peaks as u64, 4)?;
+            r.read_items_into(scratch, n_peaks, 4)?;
             let mut res = Vec::with_capacity(n_peaks);
-            for _ in 0..n_peaks {
-                res.push(r.read_f32()?);
+            for item in scratch.chunks_exact(4) {
+                res.push(read_f32_le(item, 0)?);
             }
             res
         } else {
@@ -200,16 +213,13 @@ impl ScanDataPacket {
         // f32 nodes. Per-peak noise/baseline come from interpolating this at
         // the peak m/z (see `noise_at`).
         let node_count = header.triplet_stream_size / 3;
-        r.check_count(node_count as u64, 12)?;
+        r.read_items_into(scratch, node_count as usize, 12)?;
         let mut noise_nodes = Vec::with_capacity(node_count as usize);
-        for _ in 0..node_count {
-            let mz = r.read_f32()?;
-            let noise = r.read_f32()?;
-            let baseline = r.read_f32()?;
+        for item in scratch.chunks_exact(12) {
             noise_nodes.push(NoiseNode {
-                mz,
-                noise,
-                baseline,
+                mz: read_f32_le(item, 0)?,
+                noise: read_f32_le(item, 4)?,
+                baseline: read_f32_le(item, 8)?,
             });
         }
         // Skip any trailing words if the stream size is not a multiple of 3.
@@ -279,7 +289,11 @@ impl PacketHeader {
 }
 
 impl Profile {
-    fn read<R: Read + Seek>(r: &mut BinaryReader<R>, layout: u32) -> Result<Self> {
+    fn read<R: Read + Seek>(
+        r: &mut BinaryReader<R>,
+        layout: u32,
+        scratch: &mut Vec<u8>,
+    ) -> Result<Self> {
         let first_value = r.read_f64()?;
         let step = r.read_f64()?;
         let peak_count = r.read_u32()?;
@@ -293,10 +307,10 @@ impl Profile {
             let first_bin = r.read_u32()?;
             let chunk_nbins = r.read_u32()?;
             let fudge = if has_fudge { Some(r.read_f32()?) } else { None };
-            r.check_count(chunk_nbins as u64, 4)?;
+            r.read_items_into(scratch, chunk_nbins as usize, 4)?;
             let mut signal = Vec::with_capacity(chunk_nbins as usize);
-            for _ in 0..chunk_nbins {
-                signal.push(r.read_f32()?);
+            for item in scratch.chunks_exact(4) {
+                signal.push(read_f32_le(item, 0)?);
             }
             chunks.push(ProfileChunk {
                 first_bin,
@@ -650,7 +664,7 @@ mod tests {
         let mut r = BinaryReader::new(Cursor::new(vec![0u8; 8]));
         // Skipping past EOF is allowed (only a subsequent read would fail);
         // the point of this test is that it must not panic.
-        let _ = ScanDataPacket::read_labels(&mut r, &header, 0);
+        let _ = ScanDataPacket::read_labels(&mut r, &header, 0, &mut Vec::new());
     }
 
     #[test]
@@ -660,14 +674,15 @@ mod tests {
         // crashed) runs instead.
         let header = header_with(0, u32::MAX / 4 + 1, 0);
         let mut r = BinaryReader::new(Cursor::new(vec![0u8; 8]));
-        let _ = ScanDataPacket::read_labels(&mut r, &header, 0);
+        let _ = ScanDataPacket::read_labels(&mut r, &header, 0, &mut Vec::new());
     }
 
     #[test]
     fn read_labels_with_no_streams_returns_empty() {
         let header = header_with(0, 0, 0);
         let mut r = BinaryReader::new(Cursor::new(Vec::new()));
-        let (resolutions, noise_nodes) = ScanDataPacket::read_labels(&mut r, &header, 0).unwrap();
+        let (resolutions, noise_nodes) =
+            ScanDataPacket::read_labels(&mut r, &header, 0, &mut Vec::new()).unwrap();
         assert!(resolutions.is_empty());
         assert!(noise_nodes.is_empty());
     }
@@ -681,7 +696,8 @@ mod tests {
         bytes.extend_from_slice(&1.5f32.to_le_bytes());
         bytes.extend_from_slice(&2.5f32.to_le_bytes());
         let mut r = BinaryReader::new(Cursor::new(bytes));
-        let (resolutions, _) = ScanDataPacket::read_labels(&mut r, &header, 2).unwrap();
+        let (resolutions, _) =
+            ScanDataPacket::read_labels(&mut r, &header, 2, &mut Vec::new()).unwrap();
         assert_eq!(resolutions, vec![1.5, 2.5]);
     }
 
@@ -692,7 +708,8 @@ mod tests {
         bytes.extend_from_slice(&5.0f32.to_le_bytes());
         bytes.extend_from_slice(&1.0f32.to_le_bytes());
         let mut r = BinaryReader::new(Cursor::new(bytes));
-        let (_, noise_nodes) = ScanDataPacket::read_labels(&mut r, &header, 0).unwrap();
+        let (_, noise_nodes) =
+            ScanDataPacket::read_labels(&mut r, &header, 0, &mut Vec::new()).unwrap();
         assert_eq!(noise_nodes.len(), 1);
         assert_eq!(noise_nodes[0].mz, 100.0);
         assert_eq!(noise_nodes[0].noise, 5.0);
@@ -708,8 +725,71 @@ mod tests {
         let mut bytes = u32::MAX.to_le_bytes().to_vec(); // declared peak count
         bytes.extend_from_slice(&[0u8; 4]); // far short of what's needed
         let mut r = BinaryReader::new(Cursor::new(bytes));
-        let err = ScanDataPacket::read_peaks(&mut r, &header).unwrap_err();
+        let err = ScanDataPacket::read_peaks(&mut r, &header, &mut Vec::new()).unwrap_err();
         assert!(matches!(err, Error::AllocationTooLarge { .. }));
+    }
+
+    /// Peak-list bytes: a count word followed by `count` items, narrow
+    /// (f32 m/z) or wide (f64 m/z) as the layout bit says.
+    fn peak_list_bytes(peaks: &[(f64, f32)], wide_mz: bool) -> Vec<u8> {
+        let mut bytes = (peaks.len() as u32).to_le_bytes().to_vec();
+        for (mz, abundance) in peaks {
+            if wide_mz {
+                bytes.extend_from_slice(&mz.to_le_bytes());
+            } else {
+                bytes.extend_from_slice(&(*mz as f32).to_le_bytes());
+            }
+            bytes.extend_from_slice(&abundance.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn read_peaks_decodes_the_block_the_same_in_both_layouts() {
+        for wide_mz in [false, true] {
+            let mut header = header_with(0, 0, 0);
+            header.peak_list_size = 1;
+            header.layout = if wide_mz { 0x10000 } else { 0 };
+            let expected = [(500.5f64, 10.0f32), (700.25, 2.5), (1000.125, 0.0)];
+            let bytes = peak_list_bytes(&expected, wide_mz);
+            let item_size = if wide_mz { 12 } else { 8 };
+            assert_eq!(bytes.len(), 4 + expected.len() * item_size);
+            let mut r = BinaryReader::new(Cursor::new(bytes));
+            let peaks = ScanDataPacket::read_peaks(&mut r, &header, &mut Vec::new()).unwrap();
+            assert_eq!(peaks.len(), expected.len());
+            for (peak, (mz, abundance)) in peaks.iter().zip(expected) {
+                // Narrow m/z is an f32 widened, which is what the old
+                // field-at-a-time read produced too.
+                let mz = if wide_mz { mz } else { f64::from(mz as f32) };
+                assert_eq!((peak.mz, peak.abundance), (mz, abundance));
+            }
+        }
+    }
+
+    #[test]
+    fn read_peaks_truncated_reports_the_peak_it_could_not_finish() {
+        // Two whole peaks and half of a third, with the count claiming
+        // three: the error is the one a peak-at-a-time read gave, at the
+        // offset of the peak that could not be read whole.
+        let mut header = header_with(0, 0, 0);
+        header.peak_list_size = 1;
+        let mut bytes = peak_list_bytes(&[(500.0, 1.0), (600.0, 2.0)], false);
+        bytes[0] = 3;
+        bytes.extend_from_slice(&700.0f32.to_le_bytes());
+        // Told the file is longer than this packet, as a per-scan reader is,
+        // so the allocation cap passes and the short read is what fails.
+        let mut r = BinaryReader::at(Cursor::new(bytes), 0, 64);
+        let error = ScanDataPacket::read_peaks(&mut r, &header, &mut Vec::new()).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::UnexpectedEof {
+                    offset: 20,
+                    needed: 8
+                }
+            ),
+            "got {error:?}"
+        );
     }
 
     #[test]
@@ -717,7 +797,9 @@ mod tests {
         let header = header_with(0, 0, 0);
         let mut r = BinaryReader::new(Cursor::new(Vec::new()));
         assert_eq!(
-            ScanDataPacket::read_peaks(&mut r, &header).unwrap().len(),
+            ScanDataPacket::read_peaks(&mut r, &header, &mut Vec::new())
+                .unwrap()
+                .len(),
             0
         );
     }

@@ -156,6 +156,48 @@ impl<R: Read + Seek> BinaryReader<R> {
         Ok(())
     }
 
+    /// Read `count` fixed-size items into `buf` in one go, for a stream of
+    /// identical records such as a scan's peak list or profile signal.
+    ///
+    /// `buf` is cleared and refilled, keeping its capacity, so a caller
+    /// reading scan after scan allocates once. The bound is the same
+    /// [`Self::check_count`] a field-at-a-time loop applies, and a stream
+    /// that ends early reports the item that could not be completed, at the
+    /// offset that loop would have reached, so the error a truncated file
+    /// produces does not change.
+    pub(crate) fn read_items_into(
+        &mut self,
+        buf: &mut Vec<u8>,
+        count: usize,
+        item_bytes: usize,
+    ) -> Result<()> {
+        self.check_count(count as u64, item_bytes as u64)?;
+        let total = count.saturating_mul(item_bytes);
+        buf.clear();
+        buf.resize(total, 0);
+        let mut filled = 0;
+        while filled < total {
+            match self.inner.read(&mut buf[filled..]) {
+                Ok(0) => {
+                    // Stop where the loop would have: at the start of the
+                    // first item it could not read whole.
+                    let whole = filled - filled % item_bytes.max(1);
+                    self.pos += whole as u64;
+                    buf.truncate(whole);
+                    return Err(Error::UnexpectedEof {
+                        offset: self.pos,
+                        needed: item_bytes,
+                    });
+                }
+                Ok(read) => filled += read,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(Error::Io(error)),
+            }
+        }
+        self.pos += total as u64;
+        Ok(())
+    }
+
     pub fn read_u8(&mut self) -> Result<u8> {
         let mut buf = [0u8; 1];
         self.read_bytes_into(&mut buf)?;
@@ -442,6 +484,53 @@ mod tests {
         // the stream is asked again.
         r.seek_to(32).unwrap();
         assert_eq!(r.remaining().unwrap(), 32);
+    }
+
+    #[test]
+    fn items_are_read_in_one_go_and_reuse_the_buffer() {
+        let mut r = BinaryReader::at(counting(64), 0, 64);
+        let mut buf = Vec::new();
+        r.read_items_into(&mut buf, 4, 8).unwrap();
+        assert_eq!(buf, vec![7u8; 32]);
+        assert_eq!(r.position(), 32);
+        let capacity = buf.capacity();
+        r.read_items_into(&mut buf, 2, 8).unwrap();
+        assert_eq!(buf.len(), 16);
+        assert_eq!(buf.capacity(), capacity, "the buffer should be reused");
+        assert_eq!(r.inner.seeks, 0);
+    }
+
+    #[test]
+    fn a_stream_that_ends_early_reports_the_item_it_could_not_finish() {
+        // Three whole 8-byte items and half of a fourth. A loop reading one
+        // item at a time would fail at offset 24 needing 8 bytes; so does
+        // this.
+        let mut r = BinaryReader::at(counting(28), 0, 32);
+        let mut buf = Vec::new();
+        let error = r.read_items_into(&mut buf, 4, 8).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::UnexpectedEof {
+                    offset: 24,
+                    needed: 8
+                }
+            ),
+            "got {error:?}"
+        );
+        assert_eq!(r.position(), 24);
+    }
+
+    #[test]
+    fn an_item_count_beyond_the_stream_is_capped_before_allocating() {
+        let mut r = BinaryReader::at(counting(64), 0, 64);
+        let mut buf = Vec::new();
+        let error = r.read_items_into(&mut buf, 1_000_000, 8).unwrap_err();
+        assert!(
+            matches!(error, Error::AllocationTooLarge { .. }),
+            "{error:?}"
+        );
+        assert!(buf.is_empty());
     }
 
     #[test]

@@ -837,15 +837,29 @@ impl RawFileReader {
         source: &mut R,
         scan_number: u32,
     ) -> Result<ScanDataPacket> {
-        self.read_scan_inner(source, scan_number).map_err(|error| {
-            error.with_context(self.scan_context(scan_number, crate::Operation::ReadScan))
-        })
+        self.read_scan_with(source, scan_number, &mut Vec::new())
+    }
+
+    /// [`Self::read_scan`] with a byte buffer the caller keeps between
+    /// scans, so reading a file front to back does not allocate one per
+    /// scan. The buffer's contents are not meaningful afterwards.
+    pub(crate) fn read_scan_with<R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+        scratch: &mut Vec<u8>,
+    ) -> Result<ScanDataPacket> {
+        self.read_scan_inner(source, scan_number, scratch)
+            .map_err(|error| {
+                error.with_context(self.scan_context(scan_number, crate::Operation::ReadScan))
+            })
     }
 
     fn read_scan_inner<R: Read + Seek>(
         &self,
         source: &mut R,
         scan_number: u32,
+        scratch: &mut Vec<u8>,
     ) -> Result<ScanDataPacket> {
         let entry = self.scan_index_entry(scan_number)?;
         // Both are untrusted u64 values read from the file (a
@@ -854,7 +868,7 @@ impl RawFileReader {
         let abs_offset = self.data_addr.saturating_add(entry.offset);
         source.seek(SeekFrom::Start(abs_offset))?;
         let mut r = BinaryReader::at(source, abs_offset, self.file_len);
-        ScanDataPacket::read(&mut r)
+        ScanDataPacket::read(&mut r, scratch)
     }
 
     /// Read a single scan packet's centroid peaks and FT label data
@@ -867,7 +881,7 @@ impl RawFileReader {
         source: &mut R,
         scan_number: u32,
     ) -> Result<ScanDataPacket> {
-        self.read_scan_labels_inner(source, scan_number)
+        self.read_scan_labels_inner(source, scan_number, &mut Vec::new())
             .map_err(|error| {
                 error.with_context(self.scan_context(scan_number, crate::Operation::ReadScan))
             })
@@ -877,6 +891,7 @@ impl RawFileReader {
         &self,
         source: &mut R,
         scan_number: u32,
+        scratch: &mut Vec<u8>,
     ) -> Result<ScanDataPacket> {
         use crate::scan_format::ScanDataFormat;
         if self.scan_format != ScanDataFormat::PacketHeader {
@@ -891,7 +906,7 @@ impl RawFileReader {
         let abs_offset = self.data_addr.saturating_add(entry.offset);
         source.seek(SeekFrom::Start(abs_offset))?;
         let mut r = BinaryReader::at(source, abs_offset, self.file_len);
-        ScanDataPacket::read_skip_profile(&mut r)
+        ScanDataPacket::read_skip_profile(&mut r, scratch)
     }
 
     /// Read a single scan as flat peaks (TSQ/SRM format).
@@ -984,7 +999,19 @@ impl RawFileReader {
         source: &mut R,
         scan_number: u32,
     ) -> Result<Vec<Peak>> {
-        self.read_peaks_only_inner(source, scan_number)
+        self.read_peaks_only_with(source, scan_number, &mut Vec::new())
+    }
+
+    /// [`Self::read_peaks_only`] with a byte buffer the caller keeps between
+    /// scans, so reading a file front to back does not allocate one per
+    /// scan. The buffer's contents are not meaningful afterwards.
+    pub(crate) fn read_peaks_only_with<R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+        scratch: &mut Vec<u8>,
+    ) -> Result<Vec<Peak>> {
+        self.read_peaks_only_inner(source, scan_number, scratch)
             .map_err(|error| {
                 error.with_context(self.scan_context(scan_number, crate::Operation::ReadScan))
             })
@@ -994,6 +1021,7 @@ impl RawFileReader {
         &self,
         source: &mut R,
         scan_number: u32,
+        scratch: &mut Vec<u8>,
     ) -> Result<Vec<Peak>> {
         use crate::scan_format::ScanDataFormat;
         match self.scan_format {
@@ -1005,7 +1033,7 @@ impl RawFileReader {
                 let abs_offset = self.data_addr.saturating_add(entry.offset);
                 source.seek(SeekFrom::Start(abs_offset))?;
                 let mut r = BinaryReader::at(source, abs_offset, self.file_len);
-                ScanDataPacket::read_peaks_only(&mut r)
+                ScanDataPacket::read_peaks_only(&mut r, scratch)
             }
             ScanDataFormat::FlatV63 => self.read_scan_flat(source, scan_number),
             ScanDataFormat::FlatV66 => self.read_scan_srm_v66(source, scan_number),

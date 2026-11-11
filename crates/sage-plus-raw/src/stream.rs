@@ -28,7 +28,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::spectrum::{try_extract_spectrum_into, SpectrumHeader, SpectrumRecord};
+use crate::spectrum::{SpectrumHeader, SpectrumRecord};
 use crate::RawFileReader;
 
 /// A `.raw` file opened once, read through the handle it was opened with.
@@ -39,6 +39,9 @@ pub struct SpectrumReader {
     raw: RawFileReader,
     source: BufReader<File>,
     path: PathBuf,
+    /// Reused across scans: each scan's peak block is read into it in one
+    /// go and parsed from the bytes.
+    scratch: Vec<u8>,
 }
 
 impl SpectrumReader {
@@ -53,6 +56,7 @@ impl SpectrumReader {
                 raw,
                 source,
                 path: path.to_path_buf(),
+                scratch: Vec::new(),
             })
         })();
         result.map_err(|error: Error| {
@@ -98,13 +102,14 @@ impl SpectrumReader {
         mz: &mut Vec<f64>,
         intensity: &mut Vec<f32>,
     ) -> Result<SpectrumHeader> {
-        try_extract_spectrum_into(
+        crate::spectrum::try_extract_spectrum_into_with(
             &self.raw,
             &mut self.source,
             idx,
             include_profile,
             mz,
             intensity,
+            &mut self.scratch,
         )
     }
 

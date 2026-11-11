@@ -384,7 +384,31 @@ pub fn try_extract_spectrum_into<R: Read + Seek>(
     mz: &mut Vec<f64>,
     intensity: &mut Vec<f32>,
 ) -> Result<SpectrumHeader> {
-    match fill_arrays(raw, source, idx, include_profile, mz, intensity) {
+    try_extract_spectrum_into_with(
+        raw,
+        source,
+        idx,
+        include_profile,
+        mz,
+        intensity,
+        &mut Vec::new(),
+    )
+}
+
+/// [`try_extract_spectrum_into`] with a byte buffer the caller keeps between
+/// scans, so decoding a file front to back allocates neither the peak arrays
+/// nor the block buffer per scan. The buffer's contents are not meaningful
+/// afterwards.
+pub(crate) fn try_extract_spectrum_into_with<R: Read + Seek>(
+    raw: &RawFileReader,
+    source: &mut R,
+    idx: u32,
+    include_profile: bool,
+    mz: &mut Vec<f64>,
+    intensity: &mut Vec<f32>,
+    scratch: &mut Vec<u8>,
+) -> Result<SpectrumHeader> {
+    match fill_arrays(raw, source, idx, include_profile, mz, intensity, scratch) {
         Ok((metadata, scan_mode, dropped_peaks)) => Ok(SpectrumHeader {
             metadata,
             scan_mode,
@@ -475,8 +499,15 @@ fn decode_arrays<R: Read + Seek>(
 ) -> Result<SpectrumArrays> {
     let mut mz = Vec::new();
     let mut intensity = Vec::new();
-    let (metadata, scan_mode, dropped_peaks) =
-        fill_arrays(raw, source, idx, include_profile, &mut mz, &mut intensity)?;
+    let (metadata, scan_mode, dropped_peaks) = fill_arrays(
+        raw,
+        source,
+        idx,
+        include_profile,
+        &mut mz,
+        &mut intensity,
+        &mut Vec::new(),
+    )?;
     Ok(SpectrumArrays {
         metadata,
         mz,
@@ -496,6 +527,7 @@ fn fill_arrays<R: Read + Seek, I: PeakIntensity>(
     include_profile: bool,
     mz: &mut Vec<f64>,
     intensity: &mut Vec<I>,
+    scratch: &mut Vec<u8>,
 ) -> Result<(ScanMetadata, Option<crate::ScanMode>, usize)> {
     let meta = scan_metadata(raw, idx).ok_or(crate::Error::InvalidScanIndex(idx))?;
     validate_scan_event(raw, idx)?;
@@ -510,6 +542,7 @@ fn fill_arrays<R: Read + Seek, I: PeakIntensity>(
         event,
         mz,
         intensity,
+        scratch,
     )?;
     Ok((meta, scan_mode, dropped_peaks))
 }
@@ -595,6 +628,7 @@ fn validate_profile_calibration(coeffs: &[f64], analyzer: Option<crate::Analyzer
 ///
 /// Returns the scan mode of the stored arrays and how many peaks were
 /// dropped, or an error when the scan cannot be read.
+#[allow(clippy::too_many_arguments)]
 fn fill_scan_arrays<R: Read + Seek, I: PeakIntensity>(
     raw: &RawFileReader,
     source: &mut R,
@@ -603,9 +637,10 @@ fn fill_scan_arrays<R: Read + Seek, I: PeakIntensity>(
     event: Option<&ScanEvent>,
     mz: &mut Vec<f64>,
     intensity: &mut Vec<I>,
+    scratch: &mut Vec<u8>,
 ) -> Result<(Option<crate::ScanMode>, usize)> {
     if include_profile && !raw.flat_peaks {
-        let packet = raw.read_scan(source, scan_number)?;
+        let packet = raw.read_scan_with(source, scan_number, scratch)?;
         if let Some(profile) = packet.profile {
             let coeffs = event.map(|e| e.coefficients.as_slice()).unwrap_or(&[]);
             validate_profile_calibration(coeffs, event.and_then(|e| e.preamble.analyzer()))?;
@@ -621,7 +656,7 @@ fn fill_scan_arrays<R: Read + Seek, I: PeakIntensity>(
         );
         return Ok((Some(crate::ScanMode::Centroid), dropped));
     }
-    let peaks = raw.read_peaks_only(source, scan_number)?;
+    let peaks = raw.read_peaks_only_with(source, scan_number, scratch)?;
     let dropped = extend_valid_peaks(
         peaks.iter().map(|p| (p.mz, f64::from(p.abundance))),
         mz,
