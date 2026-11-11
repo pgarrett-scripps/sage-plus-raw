@@ -345,3 +345,80 @@ fn reused_buffers_decode_what_fresh_allocations_do() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires downloaded public fixtures, run by CI"]
+fn one_handle_decodes_what_two_handles_do() {
+    // The sequential reader holds the handle it parsed the file with, so a
+    // caller does not open the same path twice. Same bytes in, same records
+    // out, scan for scan.
+    for name in [
+        "BSA-FT-ETD.raw",
+        "BSA-FT-HCD.raw",
+        "FT-HCD-MSX.raw",
+        "IT-HCD-SPS.raw",
+        "IsolationMzOffset-ReportedMassOffset.raw",
+        "source_cid_test_3scans.raw",
+    ] {
+        let path = fixture(name);
+        let raw = RawFileReader::open_path(&path).unwrap();
+        for include_profile in [false, true] {
+            let mut two_handles = File::open(&path).unwrap();
+            let expected = sage_plus_raw::try_iter_spectra(&raw, &mut two_handles, include_profile);
+            let found = sage_plus_raw::iter_spectra_from_path(&path, include_profile).unwrap();
+            assert_eq!(found.len(), raw.num_scans as usize, "{name}");
+            let mut scans = 0;
+            for (idx, (expected, found)) in expected.zip(found).enumerate() {
+                scans += 1;
+                match (expected, found) {
+                    (Ok(expected), Ok(found)) => assert_eq!(
+                        format!("{expected:?}"),
+                        format!("{found:?}"),
+                        "{name} scan index {idx}"
+                    ),
+                    (Err(expected), Err(found)) => {
+                        assert_eq!(
+                            expected.to_string(),
+                            found.to_string(),
+                            "{name} index {idx}"
+                        )
+                    }
+                    (expected, found) => {
+                        panic!("{name} scan index {idx}: {expected:?} vs {found:?}")
+                    }
+                }
+            }
+            assert_eq!(scans, raw.num_scans, "{name}");
+        }
+
+        // Reading by index through the owned handle, and into reused
+        // buffers, agrees with the same scan read the existing way.
+        let mut reader = sage_plus_raw::SpectrumReader::open_path(&path).unwrap();
+        assert_eq!(reader.num_scans(), raw.num_scans);
+        assert_eq!(reader.path(), path);
+        assert_eq!(reader.raw().num_scans, raw.num_scans);
+        let mut handle = File::open(&path).unwrap();
+        let mut mz = Vec::new();
+        let mut intensity = Vec::new();
+        // Back to front: the buffer suits a forward read, the index must not.
+        for idx in (0..raw.num_scans).rev() {
+            let expected = sage_plus_raw::try_extract_spectrum(&raw, &mut handle, idx, false);
+            let header = reader.read_spectrum_into(idx, false, &mut mz, &mut intensity);
+            match (expected, header) {
+                (Ok(expected), Ok(header)) => {
+                    let found = header.into_record(mz.clone(), intensity.clone());
+                    assert_eq!(
+                        format!("{expected:?}"),
+                        format!("{found:?}"),
+                        "{name} {idx}"
+                    );
+                }
+                (Err(expected), Err(found)) => {
+                    assert_eq!(expected.to_string(), found.to_string(), "{name} {idx}");
+                    assert!(mz.is_empty() && intensity.is_empty());
+                }
+                (expected, found) => panic!("{name} scan index {idx}: {expected:?} vs {found:?}"),
+            }
+        }
+    }
+}

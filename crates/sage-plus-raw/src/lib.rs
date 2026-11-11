@@ -18,6 +18,10 @@
 //! # }
 //! ```
 //!
+//! [`iter_spectra_from_path`] does the same from one owned handle, without
+//! opening the path twice; [`SpectrumReader`] adds reading a scan by index
+//! and into caller-owned buffers.
+//!
 //! Strict extraction propagates unreadable scans. Invalid single peaks are
 //! dropped and counted in `dropped_peaks`. Unknown scientific metadata
 //! remains unknown.
@@ -31,6 +35,7 @@ mod instrument_method;
 mod metadata;
 mod reader;
 mod spectrum;
+mod stream;
 mod types;
 
 pub(crate) mod bytes;
@@ -61,4 +66,5 @@ pub use spectrum::{
     scan_metadata, try_extract_spectrum, try_extract_spectrum_arrays, try_extract_spectrum_into,
     try_iter_spectra, PrecursorInfo, ScanMetadata, SpectrumArrays, SpectrumHeader, SpectrumRecord,
 };
+pub use stream::{iter_spectra_from_path, SpectrumIter, SpectrumReader};
 pub use types::*;
