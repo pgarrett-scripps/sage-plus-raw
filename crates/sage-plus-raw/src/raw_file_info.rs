@@ -293,6 +293,7 @@ fn primary_run_header_addrs(addrs: &[u64]) -> Result<(u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     fn preamble(
         year: u16,
@@ -429,6 +430,56 @@ mod tests {
     fn acquisition_date_rfc3339_none_when_year_zero() {
         let p = preamble(0, 1, 1, 0, 0, 0, 0);
         assert_eq!(p.acquisition_date_rfc3339(), None);
+    }
+
+    /// Byte stream for a v66 `RawFileInfoPreamble` that declares
+    /// `controller_count` controllers and holds `addrs` in its controller
+    /// address table.
+    fn v66_preamble_bytes(controller_count: u32, addrs: &[u64]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // method_file_present
+        for field in [2021u16, 6, 2, 15, 13, 45, 9, 250] {
+            bytes.extend_from_slice(&field.to_le_bytes());
+        }
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // unk2
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // defunct 32-bit data addr
+        bytes.extend_from_slice(&controller_count.to_le_bytes());
+        // controller_n2, unk5, unk6, defunct 32-bit run header addr
+        bytes.extend_from_slice(&[0u8; 16]);
+        bytes.extend_from_slice(&[0u8; 760]); // unknown_area[1]
+        bytes.extend_from_slice(&0x5000u64.to_le_bytes()); // data_addr
+        bytes.extend_from_slice(&[0u8; 8]); // unk7, unk8
+        for addr in addrs {
+            bytes.extend_from_slice(&addr.to_le_bytes());
+            bytes.extend_from_slice(&[0u8; 8]);
+        }
+        // Zero padding to the end of the 1048-byte address-table region.
+        bytes.resize(bytes.len() + 2048, 0);
+        bytes
+    }
+
+    #[test]
+    fn a_zero_controller_count_reads_the_table_at_its_real_width() {
+        let mut r = BinaryReader::new(Cursor::new(v66_preamble_bytes(0, &[0x1000, 0x2000])));
+        let p = RawFileInfoPreamble::read(&mut r, 66).expect("preamble parses");
+        // A file claiming no controllers still carries the two table slots,
+        // so the table is never empty here and the bounds check below cannot
+        // trigger from this path; it is what keeps a future narrower read
+        // (one honouring `controller_count` literally) an error rather than
+        // a panic.
+        assert_eq!(p.controller_count, 0);
+        assert_eq!(p.run_header_addrs, [0x1000, 0x2000]);
+        assert_eq!(p.run_header_addr, 0x1000);
+        assert_eq!(p.run_header_addr_2, 0x2000);
+        assert_eq!(p.data_addr, 0x5000);
+    }
+
+    #[test]
+    fn a_truncated_controller_table_is_an_error_not_a_panic() {
+        let mut bytes = v66_preamble_bytes(4, &[0x1000, 0x2000]);
+        bytes.truncate(820);
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert!(RawFileInfoPreamble::read(&mut r, 66).is_err());
     }
 
     #[test]

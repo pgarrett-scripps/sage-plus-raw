@@ -340,6 +340,22 @@ mod tests {
     }
 
     #[test]
+    fn utf16_fixed_stays_strict_about_unpaired_surrogates() {
+        // Only schema-driven trailer values decode lossily
+        // (`read_utf16_fixed_lossy`, used by `GenericRecord::read`). Fixed
+        // structural strings keep rejecting invalid UTF-16, so a corrupt
+        // structural field is still an error rather than a silent U+FFFD.
+        let mut bytes = Vec::new();
+        for u in [0x0041u16, 0xD800, 0x0042, 0x0000] {
+            bytes.extend_from_slice(&u.to_le_bytes());
+        }
+        let mut r = BinaryReader::new(Cursor::new(bytes.clone()));
+        assert!(matches!(r.read_utf16_fixed(8), Err(Error::InvalidUtf16(0))));
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(r.read_utf16_fixed_lossy(8).unwrap(), "A\u{FFFD}B");
+    }
+
+    #[test]
     fn windows_filetime_zero_is_zero() {
         let bytes = 0u64.to_le_bytes().to_vec();
         let mut r = BinaryReader::new(Cursor::new(bytes));
