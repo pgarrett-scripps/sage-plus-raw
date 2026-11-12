@@ -282,6 +282,47 @@ fn faims_requires_explicit_enablement_and_preserves_active_zero() {
 /// reused path must produce the identical record, filter string and error.
 #[test]
 #[ignore = "requires downloaded public fixtures, run by CI"]
+fn scan_index_entries_are_eighty_eight_bytes_apart_in_version_66_files() {
+    // The scan index is read back to back from `scan_index_addr`, so the
+    // entry size is the stride. Every public fixture is version 66, and in
+    // each the bytes between the scan index and the trailer stream that
+    // follows it are exactly `num_scans * 88`. 92 bytes, which this struct's
+    // documentation claimed before, would overrun the trailer.
+    for name in [
+        "BSA-FT-ETD.raw",
+        "BSA-FT-HCD.raw",
+        "FT-HCD-MSX.raw",
+        "IsolationMzOffset-ReportedMassOffset.raw",
+        "IT-HCD-SPS.raw",
+        "source_cid_test_3scans.raw",
+    ] {
+        let raw = RawFileReader::open_path(fixture(name)).unwrap();
+        assert_eq!(raw.version, 66, "{name}");
+        let header = &raw.run_header;
+        let span = header
+            .scan_trailer_addr
+            .checked_sub(header.scan_index_addr)
+            .unwrap_or_else(|| panic!("{name}: trailer does not follow the scan index"));
+        assert_eq!(span, u64::from(raw.num_scans) * 88, "{name}");
+        // The entries decoded at that stride are coherent: sequential
+        // indices, non-decreasing start times, and each scan's packet ending
+        // where the next one begins.
+        for (position, entry) in raw.scan_index.iter().enumerate() {
+            assert_eq!(u64::from(entry.index), position as u64, "{name}");
+        }
+        for pair in raw.scan_index.windows(2) {
+            assert!(pair[1].start_time >= pair[0].start_time, "{name}");
+            assert_eq!(
+                pair[1].offset,
+                pair[0].offset + u64::from(pair[0].data_size),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires downloaded public fixtures, run by CI"]
 fn reused_buffers_decode_what_fresh_allocations_do() {
     for name in [
         "BSA-FT-ETD.raw",

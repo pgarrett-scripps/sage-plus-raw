@@ -2,7 +2,14 @@ use crate::binary_reader::BinaryReader;
 use crate::error::Result;
 use std::io::{Read, Seek};
 
-/// One entry in the scan index array (v66: 92 bytes).
+/// One entry in the scan index array: 88 bytes in version 66, 80 in version
+/// 64, 72 before that (`min_size_for_version`).
+///
+/// `RawFileReader::open` reads the entries back to back from
+/// `RunHeader::scan_index_addr`, so what each version reads is also the
+/// stride. Measured on real acquisitions: in every version 66 file the bytes
+/// between `scan_index_addr` and the trailer stream that follows it are
+/// exactly `num_scans * 88`, and in a version 64 file `num_scans * 80`.
 #[derive(Debug)]
 pub struct ScanIndexEntry {
     pub index: u32,
@@ -124,6 +131,25 @@ mod tests {
         assert_eq!(entry.base_mz, 445.12);
         assert_eq!(entry.low_mz, 100.0);
         assert_eq!(entry.high_mz, 1500.0);
+    }
+
+    #[test]
+    fn min_size_for_version_is_the_entry_stride_of_each_layout() {
+        // These are the strides the files themselves show: the bytes between
+        // `scan_index_addr` and the following trailer stream divided by the
+        // scan count. 88 for version 66 (the six public ProteoWizard
+        // fixtures, and a 67,599-scan Q Exactive acquisition: 5,948,712
+        // bytes), 80 for version 64 (a 38,687-scan LTQ Orbitrap Velos
+        // acquisition: 3,094,960 bytes).
+        for version in [8, 47, 57, 60, 62, 63] {
+            assert_eq!(
+                ScanIndexEntry::min_size_for_version(version),
+                72,
+                "v{version}"
+            );
+        }
+        assert_eq!(ScanIndexEntry::min_size_for_version(64), 80);
+        assert_eq!(ScanIndexEntry::min_size_for_version(66), 88);
     }
 
     #[test]
