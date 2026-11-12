@@ -13,7 +13,9 @@ fn fold(hash: &mut u64, bytes: &[u8]) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let path = args.first().ok_or("usage: zz_checksum PATH [SCANS] [--profile]")?;
+    let path = args
+        .first()
+        .ok_or("usage: zz_checksum PATH [SCANS] [--profile]")?;
     let raw = RawFileReader::open_path(path)?;
     let scans: u32 = args
         .get(1)

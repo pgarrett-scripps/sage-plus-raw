@@ -762,6 +762,74 @@ mod tests {
         assert!(noise_nodes.is_empty());
     }
 
+    /// A packet carrying nothing but the given noise-vs-m/z nodes, which is
+    /// all `noise_at` reads.
+    fn packet_with_noise_nodes(nodes: &[(f32, f32, f32)]) -> ScanDataPacket {
+        ScanDataPacket {
+            header: header_with(0, 0, 0),
+            profile: None,
+            peaks: Vec::new(),
+            resolutions: Vec::new(),
+            noise_nodes: nodes
+                .iter()
+                .map(|&(mz, noise, baseline)| NoiseNode {
+                    mz,
+                    noise,
+                    baseline,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn noise_at_is_none_without_nodes() {
+        assert_eq!(packet_with_noise_nodes(&[]).noise_at(500.0), None);
+    }
+
+    #[test]
+    fn noise_at_clamps_to_the_endpoint_nodes() {
+        // Below the first node and above the last, the answer is that node's
+        // own (noise, baseline), not an extrapolation.
+        let packet = packet_with_noise_nodes(&[(200.0, 5.0, 1.0), (400.0, 9.0, 3.0)]);
+        assert_eq!(packet.noise_at(100.0), Some((5.0, 1.0)));
+        assert_eq!(packet.noise_at(200.0), Some((5.0, 1.0)));
+        assert_eq!(packet.noise_at(400.0), Some((9.0, 3.0)));
+        assert_eq!(packet.noise_at(10_000.0), Some((9.0, 3.0)));
+    }
+
+    #[test]
+    fn noise_at_interpolates_between_two_nodes() {
+        let packet = packet_with_noise_nodes(&[(200.0, 5.0, 1.0), (400.0, 9.0, 3.0)]);
+        // A quarter of the way along: 5 + 0.25 * 4 = 6, 1 + 0.25 * 2 = 1.5.
+        assert_eq!(packet.noise_at(250.0), Some((6.0, 1.5)));
+        // Halfway, and again in the second span of a three-node function.
+        assert_eq!(packet.noise_at(300.0), Some((7.0, 2.0)));
+        let packet =
+            packet_with_noise_nodes(&[(200.0, 5.0, 1.0), (400.0, 9.0, 3.0), (600.0, 9.0, 7.0)]);
+        assert_eq!(packet.noise_at(500.0), Some((9.0, 5.0)));
+    }
+
+    #[test]
+    fn noise_at_takes_the_lower_node_when_two_nodes_share_an_mz() {
+        // A zero-wide span: the interpolation factor is taken as zero rather
+        // than dividing by it, so the answer is the lower node, not a NaN.
+        let packet = packet_with_noise_nodes(&[(200.0, 5.0, 1.0), (200.0, 9.0, 3.0)]);
+        assert_eq!(packet.noise_at(200.0), Some((5.0, 1.0)));
+        // Queries above the first node reach the same span.
+        let packet = packet_with_noise_nodes(&[
+            (200.0, 5.0, 1.0),
+            (300.0, 7.0, 2.0),
+            (300.0, 11.0, 4.0),
+            (400.0, 13.0, 6.0),
+        ]);
+        let (noise, baseline) = packet.noise_at(300.0).unwrap();
+        assert!(
+            noise.is_finite() && baseline.is_finite(),
+            "{noise} {baseline}"
+        );
+        assert_eq!((noise, baseline), (7.0, 2.0));
+    }
+
     #[test]
     fn read_labels_decodes_resolutions_when_size_matches() {
         // unknown_stream_size == n_peaks + 1 selects the resolution-decoding
