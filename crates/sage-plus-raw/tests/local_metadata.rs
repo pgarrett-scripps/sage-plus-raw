@@ -5,7 +5,10 @@ use std::path::PathBuf;
 #[ignore = "requires THERMO_LARGE_RAW and THERMO_PUBLIC_CORPUS local fixture paths"]
 fn local_metadata_regressions() {
     let large = std::env::var("THERMO_LARGE_RAW").unwrap();
-    let raw = RawFileReader::open_path(&large).unwrap();
+    // `faims_voltage_on` below is read off the trailer record, so this asks
+    // for the records.
+    let raw =
+        RawFileReader::open_path_with(&large, sage_plus_raw::OpenOptions::with_records()).unwrap();
     assert_eq!(raw.num_scans, 5445);
     let mut source = std::fs::File::open(&large).unwrap();
     let mut scans = 0;

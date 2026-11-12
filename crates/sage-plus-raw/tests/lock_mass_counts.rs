@@ -149,7 +149,10 @@ fn public_lock_mass_counts_and_inherited_correction() {
         ),
     ] {
         let path = std::env::var(variable).unwrap_or_else(|_| panic!("set {variable}"));
-        let raw = RawFileReader::open_path(path).unwrap();
+        // Lock-mass counts are trailer fields decoding does not read, so
+        // this asks for the records.
+        let raw = RawFileReader::open_path_with(path, sage_plus_raw::OpenOptions::with_records())
+            .unwrap();
         assert_eq!(raw.instrument_model, Some(instrument));
         assert_eq!(raw.num_scans, expected_scans);
         let first = raw.run_header.sample_info.first_scan_number;

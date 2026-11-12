@@ -52,6 +52,12 @@ pub enum Error {
     UnsupportedOperation(&'static str),
 
     #[error(
+        "the {0} records were not kept when this file was opened; \
+         open it with OpenOptions::with_records() to read them"
+    )]
+    RecordsNotKept(&'static str),
+
+    #[error(
         "refusing to allocate for {requested} bytes at offset {offset:#x}: \
          only {available} bytes remain in the input"
     )]
@@ -161,6 +167,7 @@ impl Error {
             }
             Self::Io(_) => ErrorKind::Io,
             Self::InvalidScanIndex(_) | Self::InvalidScanNumber(_) => ErrorKind::InvalidInput,
+            Self::RecordsNotKept(_) => ErrorKind::InvalidInput,
             Self::UnsupportedVersion(_)
             | Self::UnsupportedOperation(_)
             | Self::UnsupportedLayout(_) => ErrorKind::Unsupported,
@@ -187,6 +194,15 @@ mod tests {
         );
         assert!(matches!(error.root_cause(), Error::Io(_)));
         assert!(error.source().unwrap().source().unwrap().source().is_some());
+    }
+
+    #[test]
+    fn records_that_were_not_kept_are_invalid_input_and_say_how_to_get_them() {
+        let error = Error::RecordsNotKept("scan parameter");
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
+        let message = error.to_string();
+        assert!(message.contains("scan parameter"), "{message}");
+        assert!(message.contains("OpenOptions::with_records()"), "{message}");
     }
 
     #[test]

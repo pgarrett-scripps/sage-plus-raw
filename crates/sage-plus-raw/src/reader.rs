@@ -77,8 +77,10 @@ pub struct RawFileReader {
     pub scan_events: Vec<ScanEvent>,
     pub scan_parameters_header: GenericDataHeader,
     /// Every per-scan trailer record, when the reader was asked to keep them
-    /// ([`OpenOptions::keep_scan_parameters`], on by default). Empty when it
-    /// was not; [`Self::scan_trailers`] then still holds what decoding reads.
+    /// ([`OpenOptions::keep_scan_parameters`], off by default). Empty when it
+    /// was not; [`Self::scan_trailers`] then still holds what decoding reads,
+    /// and [`Self::scan_params`] says so instead of reporting a missing
+    /// record.
     ///
     /// Decoding reads [`Self::scan_trailers`], which is taken out of these
     /// records while the file is opened, so editing a record here does not
@@ -92,7 +94,14 @@ pub struct RawFileReader {
     pub error_log: Vec<ErrorEntry>,
     // Instrument log uses same structure
     pub inst_log_header: GenericDataHeader,
+    /// Every per-scan instrument-log record, when the reader was asked to
+    /// keep them ([`OpenOptions::keep_instrument_log`], off by default).
+    /// Empty when it was not, and [`Self::status_log_entry`] says so instead
+    /// of reporting a missing record.
     pub inst_log: Vec<GenericRecord>,
+    /// What this reader was asked to keep, so an accessor can tell a record
+    /// that was never read from one the file does not have.
+    options: OpenOptions,
     /// Raw file version from the header.
     pub version: u32,
     /// Number of scans.
@@ -275,49 +284,64 @@ fn known_v66_body_sizes<R: Read + Seek>(
 
 /// What a reader keeps of a file's two per-scan record streams.
 ///
-/// Both are kept by default, which is what [`RawFileReader::open`] and
+/// Neither is kept by default, which is what [`RawFileReader::open`] and
 /// [`RawFileReader::open_path`] do. A record stream is one
 /// [`GenericRecord`] per scan, every field with its label: on a 136k-scan
 /// Orbitrap acquisition the trailer stream alone is 8.6 million
 /// `(String, GenericValue)` pairs, 10 million allocations and about 550 MiB
-/// resident for as long as the file is open. A caller that only decodes
-/// spectra does not need them: the values decoding reads are taken out while
-/// the file is opened and kept in [`RawFileReader::scan_trailers`], 136 bytes
-/// a scan.
+/// resident for as long as the file is open. Decoding spectra does not need
+/// them: the values it reads are taken out while the file is opened and kept
+/// in [`RawFileReader::scan_trailers`], 136 bytes a scan.
+///
+/// A caller that wants the records asks for them with
+/// [`OpenOptions::with_records`] (or one of the two narrower builders). The
+/// accessors do not quietly report an absent field when they were not kept:
+/// [`RawFileReader::scan_params`] and [`RawFileReader::status_log_entry`]
+/// return [`crate::Error::RecordsNotKept`].
+///
+/// ```no_run
+/// # fn main() -> Result<(), sage_plus_raw::Error> {
+/// use sage_plus_raw::{OpenOptions, RawFileReader};
+///
+/// // Spectra, their metadata and their filter strings: the default.
+/// let lean = RawFileReader::open_path("example.raw")?;
+/// assert!(lean.scan_params(1).is_err());
+///
+/// // Any trailer field of the schema, at the cost of the records.
+/// let full = RawFileReader::open_path_with("example.raw", OpenOptions::with_records())?;
+/// let params = full.scan_params(1)?;
+/// # let _ = params;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct OpenOptions {
     /// Keep every per-scan trailer record in
     /// [`RawFileReader::scan_parameters`], so [`RawFileReader::scan_params`]
-    /// can hand out any field of the schema. Off: that `Vec` is left empty
-    /// and `scan_params` returns `None`, while spectra, their metadata and
+    /// can hand out any field of the schema. Off, the default: that `Vec` is
+    /// left empty, `scan_params` fails with
+    /// [`crate::Error::RecordsNotKept`], and spectra, their metadata and
     /// their filter strings decode identically.
     pub keep_scan_parameters: bool,
     /// Keep every per-scan instrument-log record in
     /// [`RawFileReader::inst_log`], for
-    /// [`RawFileReader::status_log_entry`]. Off: that `Vec` is left empty,
-    /// the stream is not read, and nothing else changes - no decoding reads
-    /// the instrument log. A corrupt instrument-log record is then not read
-    /// either, so it cannot fail the open, while a corrupt trailer record
-    /// still does: the trailer stream is read for its values either way.
+    /// [`RawFileReader::status_log_entry`]. Off, the default: that `Vec` is
+    /// left empty, `status_log_entry` fails with
+    /// [`crate::Error::RecordsNotKept`], the stream is not read, and nothing
+    /// else changes - no decoding reads the instrument log. A corrupt
+    /// instrument-log record is then not read either, so it cannot fail the
+    /// open, while a corrupt trailer record still does: the trailer stream is
+    /// read for its values either way.
     pub keep_instrument_log: bool,
 }
 
 impl Default for OpenOptions {
-    fn default() -> Self {
-        Self {
-            keep_scan_parameters: true,
-            keep_instrument_log: true,
-        }
-    }
-}
-
-impl OpenOptions {
     /// Keep only what decoding spectra needs: neither per-scan record
     /// stream, which is 550 MiB and 10 million allocations less for a
     /// 136k-scan Orbitrap file, with identical spectra, metadata and filter
     /// strings.
-    pub fn spectra_only() -> Self {
+    fn default() -> Self {
         Self {
             keep_scan_parameters: false,
             keep_instrument_log: false,
@@ -325,9 +349,42 @@ impl OpenOptions {
     }
 }
 
+impl OpenOptions {
+    /// [`Self::default`]: neither per-scan record stream, named for what a
+    /// caller that only decodes spectra is asking for.
+    pub fn spectra_only() -> Self {
+        Self::default()
+    }
+
+    /// Keep both per-scan record streams, for a caller that reads trailer or
+    /// instrument-log fields beyond the ones decoding uses. This is what the
+    /// reader did by default up to 0.1.2.
+    pub fn with_records() -> Self {
+        Self {
+            keep_scan_parameters: true,
+            keep_instrument_log: true,
+        }
+    }
+
+    /// Keep the per-scan trailer records, for [`RawFileReader::scan_params`].
+    pub fn with_scan_parameters(mut self) -> Self {
+        self.keep_scan_parameters = true;
+        self
+    }
+
+    /// Keep the per-scan instrument-log records, for
+    /// [`RawFileReader::status_log_entry`].
+    pub fn with_instrument_log(mut self) -> Self {
+        self.keep_instrument_log = true;
+        self
+    }
+}
+
 impl RawFileReader {
-    /// Open and parse a RAW file from a reader, keeping both per-scan record
-    /// streams ([`OpenOptions::default`]).
+    /// Open and parse a RAW file from a reader, keeping neither per-scan
+    /// record stream ([`OpenOptions::default`]): spectra, their metadata and
+    /// their filter strings, without the trailer and instrument-log records.
+    /// [`Self::open_with`] keeps them.
     pub fn open<R: Read + Seek>(source: R) -> Result<Self> {
         Self::open_with(source, OpenOptions::default())
     }
@@ -812,6 +869,7 @@ impl RawFileReader {
             error_log,
             inst_log_header,
             inst_log,
+            options,
             version,
             num_scans,
             file_len,
@@ -835,8 +893,8 @@ impl RawFileReader {
         Ok(reader)
     }
 
-    /// Open a RAW file from a path, keeping both per-scan record streams
-    /// ([`OpenOptions::default`]).
+    /// Open a RAW file from a path, keeping neither per-scan record stream
+    /// ([`OpenOptions::default`]). [`Self::open_path_with`] keeps them.
     pub fn open_path(path: impl AsRef<std::path::Path>) -> Result<Self> {
         Self::open_path_with(path, OpenOptions::default())
     }
@@ -1189,14 +1247,29 @@ impl RawFileReader {
         }
     }
 
+    /// What this reader was asked to keep when the file was opened.
+    pub fn open_options(&self) -> OpenOptions {
+        self.options
+    }
+
     /// Return the scan-parameter record for a given 1-based scan number.
     ///
-    /// Returns `None` if the file has no scan-parameter stream or if
-    /// `scan_number` is outside the valid scan range.
-    pub fn scan_parameters(&self, scan_number: u32) -> Option<&GenericRecord> {
+    /// # Errors
+    ///
+    /// [`crate::Error::RecordsNotKept`] when the records were not kept
+    /// ([`OpenOptions::keep_scan_parameters`], off by default), so a caller
+    /// cannot read "no such field" into a record that was never read.
+    /// [`crate::Error::InvalidScanNumber`] when the file has no
+    /// scan-parameter stream, or `scan_number` is outside the valid range.
+    pub fn scan_parameters(&self, scan_number: u32) -> Result<&GenericRecord> {
+        if !self.options.keep_scan_parameters {
+            return Err(Error::RecordsNotKept("scan parameter"));
+        }
         let first = self.run_header.sample_info.first_scan_number;
-        let idx = scan_number.checked_sub(first)? as usize;
-        self.scan_parameters.get(idx)
+        scan_number
+            .checked_sub(first)
+            .and_then(|idx| self.scan_parameters.get(idx as usize))
+            .ok_or(Error::InvalidScanNumber(scan_number))
     }
 
     /// Return a typed view of the scan-parameter record for a given scan.
@@ -1204,7 +1277,12 @@ impl RawFileReader {
     /// This wraps [`Self::scan_parameters`] in a [`ScanParams`] accessor that
     /// provides named, type-safe fields and handles label-name variations
     /// across instrument families.
-    pub fn scan_params(&self, scan_number: u32) -> Option<ScanParams<'_>> {
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::scan_parameters`]. The ten values decoding a spectrum reads
+    /// are in [`Self::scan_trailer`] whether or not the records were kept.
+    pub fn scan_params(&self, scan_number: u32) -> Result<ScanParams<'_>> {
         self.scan_parameters(scan_number).map(ScanParams)
     }
 
@@ -1212,7 +1290,8 @@ impl RawFileReader {
     /// [`Self::scan_trailers`].
     ///
     /// Unlike [`Self::scan_params`] this is there whether or not the records
-    /// were kept ([`OpenOptions::keep_scan_parameters`]), and it is what
+    /// were kept ([`OpenOptions::keep_scan_parameters`], off by default),
+    /// which is why it needs no option and cannot fail that way. It is what
     /// [`crate::scan_metadata`] and the rendered scan filter read. `None`
     /// when the file has no trailer stream or the scan is out of range.
     pub fn scan_trailer(&self, scan_number: u32) -> Option<&ScanTrailer> {
@@ -1221,22 +1300,37 @@ impl RawFileReader {
         self.scan_trailers.get(idx)
     }
 
-    /// Return the raw instrument-log record for a given scan number, or
-    /// `None` if the scan is out of range or no instrument log was found.
+    /// Return the raw instrument-log record for a given scan number.
     ///
     /// The instrument log contains per-scan instrument-state values:
     /// temperatures, voltages, pressures, ion counts, etc.
-    pub fn inst_log_record(&self, scan_number: u32) -> Option<&GenericRecord> {
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RecordsNotKept`] when the records were not kept
+    /// ([`OpenOptions::keep_instrument_log`], off by default): the stream is
+    /// then not even read. [`crate::Error::InvalidScanNumber`] when the file
+    /// has no instrument log, or the scan is out of range.
+    pub fn inst_log_record(&self, scan_number: u32) -> Result<&GenericRecord> {
+        if !self.options.keep_instrument_log {
+            return Err(Error::RecordsNotKept("instrument log"));
+        }
         let first = self.run_header.sample_info.first_scan_number;
-        let idx = scan_number.checked_sub(first)? as usize;
-        self.inst_log.get(idx)
+        scan_number
+            .checked_sub(first)
+            .and_then(|idx| self.inst_log.get(idx as usize))
+            .ok_or(Error::InvalidScanNumber(scan_number))
     }
 
     /// Return a typed [`StatusLogEntry`] view for the given scan number.
     ///
     /// This wraps [`Self::inst_log_record`] and provides named, type-safe
     /// accessors for common instrument-status fields.
-    pub fn status_log_entry(&self, scan_number: u32) -> Option<StatusLogEntry<'_>> {
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::inst_log_record`].
+    pub fn status_log_entry(&self, scan_number: u32) -> Result<StatusLogEntry<'_>> {
         self.inst_log_record(scan_number).map(StatusLogEntry)
     }
 
@@ -1497,6 +1591,35 @@ fn extract_utf16le_text(buf: &[u8], min_chars: usize) -> Option<String> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn the_default_open_keeps_neither_per_scan_record_stream() {
+        let lean = OpenOptions::default();
+        assert!(!lean.keep_scan_parameters);
+        assert!(!lean.keep_instrument_log);
+        assert_eq!(OpenOptions::spectra_only(), lean);
+
+        let both = OpenOptions::with_records();
+        assert!(both.keep_scan_parameters);
+        assert!(both.keep_instrument_log);
+        assert_eq!(lean.with_scan_parameters().with_instrument_log(), both);
+
+        // Each builder asks for one stream, not both.
+        assert_eq!(
+            lean.with_scan_parameters(),
+            OpenOptions {
+                keep_scan_parameters: true,
+                keep_instrument_log: false,
+            }
+        );
+        assert_eq!(
+            lean.with_instrument_log(),
+            OpenOptions {
+                keep_scan_parameters: false,
+                keep_instrument_log: true,
+            }
+        );
+    }
 
     fn inst_id_block(model1: &str, model2: &str) -> Vec<u8> {
         let mut bytes = vec![0u8; 12];

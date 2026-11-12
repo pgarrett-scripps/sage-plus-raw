@@ -46,17 +46,18 @@ pub struct SpectrumReader {
 
 impl SpectrumReader {
     /// Open `path`, parse its structure, and keep the handle for reading
-    /// scans, keeping both per-scan record streams
-    /// ([`crate::OpenOptions::default`]).
+    /// scans, keeping neither per-scan record stream
+    /// ([`crate::OpenOptions::default`]), which is 550 MiB and 10 million
+    /// allocations less for a 136k-scan Orbitrap file.
     pub fn open_path(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_path_with(path, crate::OpenOptions::default())
     }
 
-    /// [`Self::open_path`] with [`crate::OpenOptions`], so a caller reading
-    /// only spectra can leave the per-scan trailer and instrument-log
-    /// records unparsed: [`crate::OpenOptions::spectra_only`] is 550 MiB and
-    /// 10 million allocations less for a 136k-scan Orbitrap file, and decodes
-    /// the same spectra.
+    /// [`Self::open_path`] with [`crate::OpenOptions`], for a caller that
+    /// also wants the per-scan trailer or instrument-log records:
+    /// [`crate::OpenOptions::with_records`] keeps both, at 550 MiB and 10
+    /// million allocations more for a 136k-scan Orbitrap file. The spectra
+    /// are the same either way.
     pub fn open_path_with(path: impl AsRef<Path>, options: crate::OpenOptions) -> Result<Self> {
         let path = path.as_ref();
         let result = (|| {

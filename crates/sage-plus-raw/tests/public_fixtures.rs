@@ -252,7 +252,11 @@ fn failures_retain_scan_offsets_categories_and_io_sources() {
 #[ignore = "requires downloaded public fixtures, run by CI"]
 fn faims_requires_explicit_enablement_and_preserves_active_zero() {
     use sage_plus_raw::generic_data::GenericValue;
-    let mut raw = RawFileReader::open_path(fixture("BSA-FT-HCD.raw")).unwrap();
+    let mut raw = RawFileReader::open_path_with(
+        fixture("BSA-FT-HCD.raw"),
+        sage_plus_raw::OpenOptions::with_records(),
+    )
+    .unwrap();
     for (enabled, voltage, expected) in [
         (Some(GenericValue::Bool(false)), 0.0, None),
         (Some(GenericValue::Bool(false)), -45.0, None),
@@ -473,12 +477,13 @@ fn one_handle_decodes_what_two_handles_do() {
 #[test]
 #[ignore = "requires downloaded public fixtures, run by CI"]
 fn dropping_the_per_scan_records_decodes_the_same_spectra() {
-    // `OpenOptions::spectra_only` leaves the per-scan trailer and
-    // instrument-log records unparsed, which is what makes a concurrent
+    // A reader leaves the per-scan trailer and instrument-log records
+    // unparsed unless asked for them, which is what makes a concurrent
     // five-file search hold hundreds of megabytes less. Everything decoding
     // reads from a trailer record is taken out while the file is opened, so
     // every scan's metadata, filter string and peak arrays must come out
     // byte for byte as they do with the records kept.
+    use sage_plus_raw::ErrorKind;
     for name in [
         "BSA-FT-ETD.raw",
         "BSA-FT-HCD.raw",
@@ -488,13 +493,38 @@ fn dropping_the_per_scan_records_decodes_the_same_spectra() {
         "source_cid_test_3scans.raw",
     ] {
         let path = fixture(name);
-        let kept = RawFileReader::open_path(&path).unwrap();
-        let dropped =
-            RawFileReader::open_path_with(&path, sage_plus_raw::OpenOptions::spectra_only())
-                .unwrap();
+        let kept = RawFileReader::open_path_with(&path, sage_plus_raw::OpenOptions::with_records())
+            .unwrap();
+        // The plain open is the dropped one: that is the default.
+        let dropped = RawFileReader::open_path(&path).unwrap();
         assert!(!kept.scan_parameters.is_empty(), "{name}");
         assert!(dropped.scan_parameters.is_empty(), "{name}");
         assert!(dropped.inst_log.is_empty(), "{name}");
+        // Asking a reader for records it was not given does not look like a
+        // record without the field: it says so.
+        let first = kept.run_header.sample_info.first_scan_number;
+        let not_kept = dropped.scan_params(first).unwrap_err();
+        assert_eq!(not_kept.kind(), ErrorKind::InvalidInput, "{name}");
+        assert!(not_kept.to_string().contains("were not kept"), "{name}");
+        assert!(dropped.scan_parameters(first).is_err(), "{name}");
+        assert!(dropped.status_log_entry(first).is_err(), "{name}");
+        assert!(dropped.inst_log_record(first).is_err(), "{name}");
+        // With the records, a scan that is not there is a scan number error,
+        // not a missing stream.
+        assert!(kept.scan_params(first).is_ok(), "{name}");
+        assert_eq!(
+            kept.scan_params(u32::MAX).unwrap_err().kind(),
+            ErrorKind::InvalidInput,
+            "{name}"
+        );
+        assert!(
+            !kept
+                .scan_params(u32::MAX)
+                .unwrap_err()
+                .to_string()
+                .contains("were not kept"),
+            "{name}"
+        );
         // The compact table is there either way, and is the same table.
         assert_eq!(kept.scan_trailers.len(), kept.num_scans as usize, "{name}");
         assert_eq!(kept.scan_trailers, dropped.scan_trailers, "{name}");
@@ -531,12 +561,12 @@ fn dropping_the_per_scan_records_decodes_the_same_spectra() {
             );
         }
         for include_profile in [false, true] {
-            let mut with_records = sage_plus_raw::SpectrumReader::open_path(&path).unwrap();
-            let mut without = sage_plus_raw::SpectrumReader::open_path_with(
+            let mut with_records = sage_plus_raw::SpectrumReader::open_path_with(
                 &path,
-                sage_plus_raw::OpenOptions::spectra_only(),
+                sage_plus_raw::OpenOptions::with_records(),
             )
             .unwrap();
+            let mut without = sage_plus_raw::SpectrumReader::open_path(&path).unwrap();
             for idx in 0..kept.num_scans {
                 let expected = with_records.read_spectrum(idx, include_profile);
                 let found = without.read_spectrum(idx, include_profile);

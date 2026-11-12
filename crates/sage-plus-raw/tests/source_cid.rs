@@ -8,7 +8,9 @@ use sage_plus_raw::{scan_metadata, RawFileReader};
 #[ignore = "requires public GPST000122 Q Exactive Plus source-CID fixture"]
 fn public_negative_plus_source_cid_method_fallback() {
     let path = std::env::var("OPENTFRAW_SOURCE_CID_PLUS_RAW").expect("set fixture path");
-    let raw = RawFileReader::open_path(&path).unwrap();
+    // Asserting what the trailer records do not hold needs the records.
+    let raw =
+        RawFileReader::open_path_with(&path, sage_plus_raw::OpenOptions::with_records()).unwrap();
     assert_eq!(raw.instrument_model, Some("Q Exactive Plus"));
     assert_eq!(raw.num_scans, 6674);
     let mut source = std::fs::File::open(path).unwrap();
@@ -44,7 +46,8 @@ fn public_negative_plus_source_cid_method_fallback() {
 #[ignore = "requires public PXD068962 insource-CID.raw fixture"]
 fn public_source_cid_method_and_trailer_precedence() {
     let path = std::env::var("OPENTFRAW_SOURCE_CID_RAW").expect("set fixture path");
-    let mut raw = RawFileReader::open_path(path).unwrap();
+    let mut raw =
+        RawFileReader::open_path_with(path, sage_plus_raw::OpenOptions::with_records()).unwrap();
     assert_eq!(raw.num_scans, 3047);
     let first = raw.run_header.sample_info.first_scan_number;
     for n in first..=raw.run_header.sample_info.last_scan_number {
@@ -68,6 +71,7 @@ fn public_source_cid_method_and_trailer_precedence() {
         raw.scan_parameters[0]
             .values
             .push(("Source CID eV:".into(), value));
+        reextract_trailer(&mut raw);
         assert_eq!(raw.source_cid_energy_ev(first), expected);
         assert_eq!(
             raw.source_cid_energy_source(first),
@@ -89,6 +93,16 @@ fn public_source_cid_method_and_trailer_precedence() {
         raw.scan_parameters[0] = GenericRecord {
             values: ids.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
         };
+        reextract_trailer(&mut raw);
         assert_eq!(raw.source_cid_energy_ev(first), None);
     }
+}
+
+/// The source-CID setting is read from the compact trailer row, taken out of
+/// each record while the file is opened, so a test that edits a record puts
+/// its row back the way the open loop does.
+fn reextract_trailer(raw: &mut RawFileReader) {
+    raw.scan_trailers[0] = sage_plus_raw::ScanTrailer::from_params(&sage_plus_raw::ScanParams(
+        &raw.scan_parameters[0],
+    ));
 }

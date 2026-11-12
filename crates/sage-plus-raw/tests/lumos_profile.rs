@@ -7,7 +7,10 @@ use std::{fs::File, io::BufReader};
 #[ignore = "requires public PXD031322 OFL001513-YLL-GPF-15K-1.raw fixture"]
 fn public_lumos_ms1_profile_calibration_matches_scan_trailers() {
     let path = std::env::var("OPENTFRAW_LUMOS_PROFILE_RAW").expect("set public fixture path");
-    let raw = RawFileReader::open_path(&path).unwrap();
+    // The conversion parameters compared here are trailer fields decoding
+    // does not read, so this asks for the records.
+    let raw =
+        RawFileReader::open_path_with(&path, sage_plus_raw::OpenOptions::with_records()).unwrap();
     assert_eq!(raw.num_scans, 152328);
     let mut source = BufReader::new(File::open(&path).unwrap());
     let mut primary_count = 0;

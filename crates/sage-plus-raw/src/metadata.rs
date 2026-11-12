@@ -10,15 +10,22 @@ use crate::generic_data::{GenericRecord, GenericValue};
 /// most common labels so callers do not need to hard-code instrument-specific
 /// strings.
 ///
+/// Reading these needs a reader opened with the per-scan trailer records
+/// ([`crate::OpenOptions::with_records`]); the ten values decoding a spectrum
+/// reads are in [`ScanTrailer`] either way.
+///
 /// # Example
 /// ```no_run
-/// use sage_plus_raw::RawFileReader;
-/// let raw = RawFileReader::open_path("experiment.raw").unwrap();
-/// if let Some(p) = raw.scan_params(1) {
-///     println!("Injection time: {:?} ms", p.ion_injection_time_ms());
-///     println!("Charge state:   {:?}", p.charge_state());
-/// }
+/// # fn main() -> Result<(), sage_plus_raw::Error> {
+/// use sage_plus_raw::{OpenOptions, RawFileReader};
+/// let raw = RawFileReader::open_path_with("experiment.raw", OpenOptions::with_records())?;
+/// let p = raw.scan_params(1)?;
+/// println!("Injection time: {:?} ms", p.ion_injection_time_ms());
+/// println!("Charge state:   {:?}", p.charge_state());
+/// # Ok(())
+/// # }
 /// ```
+#[derive(Debug)]
 pub struct ScanParams<'a>(pub &'a GenericRecord);
 
 impl<'a> ScanParams<'a> {
@@ -449,9 +456,9 @@ impl<'a> ScanParams<'a> {
 /// every field of the stream's schema together with that field's label: on a
 /// 136k-scan Orbitrap file, 8.6 million `(String, GenericValue)` pairs and
 /// about 550 MiB resident while the file is read. This is the part the
-/// decoders use, 136 bytes a scan, so a reader opened with
-/// [`crate::OpenOptions::spectra_only`] can drop the records and still
-/// decode byte-identical spectra and filter strings.
+/// decoders use, 136 bytes a scan, so a reader keeps only this by default
+/// ([`crate::OpenOptions`]) and still decodes byte-identical spectra and
+/// filter strings.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 #[non_exhaustive]
 pub struct ScanTrailer {
@@ -521,6 +528,7 @@ impl ScanTrailer {
 /// The instrument log records instrument-state values (temperatures, voltages,
 /// pressures, etc.) at the time each scan was acquired. The schema varies
 /// across instrument models.
+#[derive(Debug)]
 pub struct StatusLogEntry<'a>(pub &'a GenericRecord);
 
 impl<'a> StatusLogEntry<'a> {

@@ -14,7 +14,12 @@ fn main() {
         .windows(2)
         .find(|w| w[0] == "--max-scans")
         .and_then(|w| w[1].parse().ok());
-    match sage_plus_raw::RawFileReader::open_path(path) {
+    // A dump prints the per-scan records, so it asks for them; the default
+    // reader keeps only what decoding spectra reads.
+    match sage_plus_raw::RawFileReader::open_path_with(
+        path,
+        sage_plus_raw::OpenOptions::with_records(),
+    ) {
         Ok(raw) => {
             println!("=== Thermo RAW File ===");
             println!("Version:  {}", raw.version);
@@ -164,7 +169,7 @@ fn main() {
 
             // Typed accessor summary for scan 1
             let first = raw.run_header.sample_info.first_scan_number;
-            if let Some(p) = raw.scan_params(first) {
+            if let Ok(p) = raw.scan_params(first) {
                 println!("--- Scan 1 Typed Summary ---");
                 println!("  injection_time_ms  : {:?}", p.ion_injection_time_ms());
                 println!("  charge_state       : {:?}", p.charge_state());
