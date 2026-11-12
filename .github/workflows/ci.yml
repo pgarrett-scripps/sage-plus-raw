@@ -68,7 +68,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --locked -p sage-plus-raw
+      - run: cargo build --locked -p sage-plus-raw --all-targets
 
   docs:
     name: docs
