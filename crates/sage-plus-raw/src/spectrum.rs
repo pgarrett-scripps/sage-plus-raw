@@ -173,7 +173,9 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
     let scan_number = first_scan.checked_add(idx)?;
     let entry = raw.scan_index.get(idx as usize)?;
     let event = raw.scan_events.get(idx as usize);
-    let params = raw.scan_params(scan_number);
+    // The trailer values this scan needs, taken out of its record while the
+    // file was opened, so the records themselves need not be kept.
+    let trailer = raw.scan_trailer(scan_number);
 
     let is_srm = raw.flat_peaks;
     let level = if is_srm {
@@ -225,29 +227,21 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
         } else {
             let reaction = event.and_then(|e| e.reactions.first());
             let (tm, sm) = precursor_masses(
-                params.as_ref().and_then(|p| p.isolation_target_mz()),
-                params.as_ref().and_then(|p| p.monoisotopic_mz()),
+                trailer.and_then(|t| t.isolation_target_mz),
+                trailer.and_then(|t| t.monoisotopic_mz),
                 reaction.map(|r| r.precursor_mz),
             );
-            let iw = params.as_ref().and_then(|p| p.isolation_width_mz());
-            let ch = params
-                .as_ref()
-                .and_then(|p| p.charge_state())
-                .filter(|&z| z > 0);
-            let ae_from_params = params
-                .as_ref()
-                .and_then(|p| p.activation_energy())
+            let iw = trailer.and_then(|t| t.isolation_width_mz);
+            let ch = trailer.and_then(|t| t.charge_state).filter(|&z| z > 0);
+            let ae_from_params = trailer
+                .and_then(|t| t.activation_energy)
                 .filter(|&e| e > 0.0);
-            let ae_is_nce = ae_from_params.is_some()
-                && params
-                    .as_ref()
-                    .map(|p| p.activation_energy_is_nce())
-                    .unwrap_or(false);
+            let ae_is_nce =
+                ae_from_params.is_some() && trailer.is_some_and(|t| t.activation_energy_is_nce);
             // Reaction energy has no qualified unit, so only labeled values are exported.
             let ae = ae_from_params;
-            let master = params
-                .as_ref()
-                .and_then(|p| p.master_scan_number())
+            let master = trailer
+                .and_then(|t| t.master_scan_number)
                 .filter(|&n| n > 0)
                 .map(|n| n as u32)
                 .filter(|&n| n >= first_scan && n < scan_number)
@@ -269,10 +263,10 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
         None
     };
 
-    let ion_injection_time_ms = params.as_ref().and_then(|p| p.ion_injection_time_ms());
-    let faims_cv = params.as_ref().and_then(|p| {
-        (p.faims_voltage_on() == Some(true))
-            .then(|| p.faims_cv())
+    let ion_injection_time_ms = trailer.and_then(|t| t.ion_injection_time_ms);
+    let faims_cv = trailer.and_then(|t| {
+        (t.faims_voltage_on == Some(true))
+            .then_some(t.faims_cv)
             .flatten()
             .filter(|value| value.is_finite())
     });

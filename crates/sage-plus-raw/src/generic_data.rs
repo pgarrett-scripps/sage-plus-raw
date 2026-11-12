@@ -18,7 +18,7 @@ pub struct GenericDataHeader {
 }
 
 /// A typed value from a generic record.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum GenericValue {
     Gap,
     Int8(i8),
@@ -191,51 +191,125 @@ fn label_is_plausible(s: &str) -> bool {
     s.len() <= 200
 }
 
+/// Decode one field over the top of `slot`, reusing the `String` already
+/// there for a string field and `scratch` for its bytes. The values and the
+/// errors are those [`GenericRecord::read`] has always produced; this is the
+/// one place a generic-record field is decoded.
+fn read_field_into<R: Read + Seek>(
+    r: &mut BinaryReader<R>,
+    desc: &GenericDataDescriptor,
+    slot: &mut GenericValue,
+    scratch: &mut Vec<u8>,
+) -> Result<()> {
+    let value = match desc.field_type {
+        GenericType::Gap => GenericValue::Gap,
+        GenericType::Int8 => GenericValue::Int8(r.read_i8()?),
+        GenericType::Bool | GenericType::BoolYesNo | GenericType::BoolOnOff => {
+            GenericValue::Bool(r.read_u8()? != 0)
+        }
+        GenericType::UInt8 => GenericValue::UInt8(r.read_u8()?),
+        GenericType::Int16 => GenericValue::Int16(r.read_i16()?),
+        GenericType::UInt16 => GenericValue::UInt16(r.read_u16()?),
+        GenericType::Int32 => GenericValue::Int32(r.read_i32()?),
+        GenericType::UInt32 => GenericValue::UInt32(r.read_u32()?),
+        GenericType::Float32 => GenericValue::Float32(r.read_f32()?),
+        GenericType::Float64 => GenericValue::Float64(r.read_f64()?),
+        GenericType::AsciiString => {
+            if desc.length > 0 {
+                let bytes = r.read_bytes_scratch(scratch, desc.length as usize)?;
+                let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                let text = String::from_utf8_lossy(&bytes[..end]);
+                store_text(slot, &text);
+            } else {
+                store_text(slot, "");
+            }
+            return Ok(());
+        }
+        GenericType::WideString => {
+            if desc.length > 0 {
+                // Lossy: a malformed trailer string must not fail the whole
+                // open.
+                let mut text = take_text(slot);
+                let result =
+                    r.read_utf16_fixed_lossy_into(desc.length as usize * 2, scratch, &mut text);
+                *slot = GenericValue::String(text);
+                result?;
+            } else {
+                store_text(slot, "");
+            }
+            return Ok(());
+        }
+    };
+    *slot = value;
+    Ok(())
+}
+
+/// Put `text` in `slot`, keeping the `String` already there if it holds one.
+fn store_text(slot: &mut GenericValue, text: &str) {
+    match slot {
+        GenericValue::String(existing) => {
+            existing.clear();
+            existing.push_str(text);
+        }
+        other => *other = GenericValue::String(text.to_string()),
+    }
+}
+
+/// The `String` in `slot`, to be written and put back, or a new one.
+fn take_text(slot: &mut GenericValue) -> String {
+    match std::mem::replace(slot, GenericValue::Gap) {
+        GenericValue::String(existing) => existing,
+        _ => String::new(),
+    }
+}
+
 impl GenericRecord {
     pub(crate) fn read<R: Read + Seek>(
         r: &mut BinaryReader<R>,
         header: &GenericDataHeader,
     ) -> Result<Self> {
-        let mut values = Vec::with_capacity(header.fields.len());
-        for desc in &header.fields {
-            let label = desc.label.clone();
-            let value = match desc.field_type {
-                GenericType::Gap => GenericValue::Gap,
-                GenericType::Int8 => GenericValue::Int8(r.read_i8()?),
-                GenericType::Bool | GenericType::BoolYesNo | GenericType::BoolOnOff => {
-                    GenericValue::Bool(r.read_u8()? != 0)
-                }
-                GenericType::UInt8 => GenericValue::UInt8(r.read_u8()?),
-                GenericType::Int16 => GenericValue::Int16(r.read_i16()?),
-                GenericType::UInt16 => GenericValue::UInt16(r.read_u16()?),
-                GenericType::Int32 => GenericValue::Int32(r.read_i32()?),
-                GenericType::UInt32 => GenericValue::UInt32(r.read_u32()?),
-                GenericType::Float32 => GenericValue::Float32(r.read_f32()?),
-                GenericType::Float64 => GenericValue::Float64(r.read_f64()?),
-                GenericType::AsciiString => {
-                    let s = if desc.length > 0 {
-                        let bytes = r.read_bytes(desc.length as usize)?;
-                        let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-                        String::from_utf8_lossy(&bytes[..end]).into_owned()
-                    } else {
-                        String::new()
-                    };
-                    GenericValue::String(s)
-                }
-                GenericType::WideString => {
-                    let s = if desc.length > 0 {
-                        // Lossy: a malformed trailer string must not fail the
-                        // whole open.
-                        r.read_utf16_fixed_lossy(desc.length as usize * 2)?
-                    } else {
-                        String::new()
-                    };
-                    GenericValue::String(s)
-                }
-            };
-            values.push((label, value));
+        let mut record = Self { values: Vec::new() };
+        record.read_into(r, header, &mut Vec::new())?;
+        Ok(record)
+    }
+
+    /// Read one record over the top of this one, for a caller walking a
+    /// whole stream: a per-scan stream of 136k records then allocates
+    /// nothing per record instead of this record's `Vec`, one `String` per
+    /// field for the label, and one per string value.
+    ///
+    /// The labels are cloned from `header` only when this record does not
+    /// already carry exactly them, so passing the same header every time
+    /// costs one comparison per field. `scratch` is a byte buffer for
+    /// fixed-length string fields; its contents are not meaningful
+    /// afterwards. The values are those [`Self::read`] produces.
+    pub(crate) fn read_into<R: Read + Seek>(
+        &mut self,
+        r: &mut BinaryReader<R>,
+        header: &GenericDataHeader,
+        scratch: &mut Vec<u8>,
+    ) -> Result<()> {
+        if !self.describes(header) {
+            self.values.clear();
+            self.values.reserve(header.fields.len());
+            for desc in &header.fields {
+                self.values.push((desc.label.clone(), GenericValue::Gap));
+            }
         }
-        Ok(Self { values })
+        for (slot, desc) in self.values.iter_mut().zip(&header.fields) {
+            read_field_into(r, desc, &mut slot.1, scratch)?;
+        }
+        Ok(())
+    }
+
+    /// Whether this record's labels are already `header`'s, field for field.
+    fn describes(&self, header: &GenericDataHeader) -> bool {
+        self.values.len() == header.fields.len()
+            && self
+                .values
+                .iter()
+                .zip(&header.fields)
+                .all(|((label, _), desc)| *label == desc.label)
     }
 
     /// Look up a field by label and return a reference to its value.
@@ -350,6 +424,108 @@ mod tests {
         }
         // The stream stays aligned for the following field.
         assert!(matches!(rec.get("Next:"), Some(GenericValue::Int32(7))));
+    }
+
+    /// A schema with one field of every kind a trailer stream mixes, so a
+    /// record exercises both string paths and the scalars between them.
+    fn mixed_header() -> GenericDataHeader {
+        GenericDataHeader {
+            fields: vec![
+                GenericDataDescriptor {
+                    field_type: GenericType::Float64,
+                    length: 0,
+                    label: "RT:".into(),
+                },
+                GenericDataDescriptor {
+                    field_type: GenericType::AsciiString,
+                    length: 6,
+                    label: "Tag:".into(),
+                },
+                GenericDataDescriptor {
+                    field_type: GenericType::WideString,
+                    length: 4,
+                    label: "Comment:".into(),
+                },
+                GenericDataDescriptor {
+                    field_type: GenericType::Int32,
+                    length: 0,
+                    label: "Scan:".into(),
+                },
+            ],
+        }
+    }
+
+    /// One record for `mixed_header`: an f64, a 6-byte ASCII field, four
+    /// UTF-16 code units, an i32.
+    fn mixed_record_bytes(rt: f64, tag: &str, comment: &str, scan: i32) -> Vec<u8> {
+        let mut out = rt.to_le_bytes().to_vec();
+        let mut ascii = tag.as_bytes().to_vec();
+        ascii.resize(6, 0);
+        out.extend_from_slice(&ascii);
+        out.extend_from_slice(&crate::test_util::utf16_fixed(comment, 8));
+        out.extend_from_slice(&scan.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn a_reused_record_decodes_what_a_fresh_one_does() {
+        let header = mixed_header();
+        let records = [
+            mixed_record_bytes(1.5, "abc", "hi", 7),
+            mixed_record_bytes(2.5, "de", "there", 8),
+            // Shorter values than the record before, to catch a reused
+            // `String` keeping the tail of the previous one.
+            mixed_record_bytes(3.5, "f", "x", 9),
+        ];
+        let stream: Vec<u8> = records.concat();
+
+        let mut fresh = BinaryReader::new(Cursor::new(stream.clone()));
+        let one_by_one: Vec<GenericRecord> = (0..records.len())
+            .map(|_| GenericRecord::read(&mut fresh, &header).expect("fresh record"))
+            .collect();
+
+        let mut reused = GenericRecord { values: Vec::new() };
+        let mut scratch = Vec::new();
+        let mut r = BinaryReader::new(Cursor::new(stream));
+        let mut label_ptr = None;
+        for expected in &one_by_one {
+            reused
+                .read_into(&mut r, &header, &mut scratch)
+                .expect("reused record");
+            assert_eq!(reused.values, expected.values);
+            // Nothing is allocated per record after the first: the label
+            // strings and the string value's buffer stay where they were.
+            let ptr = (
+                reused.values[0].0.as_ptr(),
+                match &reused.values[1].1 {
+                    GenericValue::String(s) => s.as_ptr(),
+                    other => panic!("expected a string value: {other:?}"),
+                },
+            );
+            if let Some(first) = label_ptr {
+                assert_eq!(ptr, first);
+            }
+            label_ptr = Some(ptr);
+        }
+    }
+
+    #[test]
+    fn a_reused_record_rebuilds_itself_for_a_different_schema() {
+        let header = mixed_header();
+        let mut other = GenericDataHeader {
+            fields: header.fields.clone(),
+        };
+        other.fields[0].label = "Start:".into();
+        let bytes = mixed_record_bytes(1.5, "abc", "hi", 7);
+        let mut reused = GenericRecord { values: Vec::new() };
+        let mut scratch = Vec::new();
+        let mut r = BinaryReader::new(Cursor::new(bytes.clone()));
+        reused.read_into(&mut r, &header, &mut scratch).unwrap();
+        assert!(reused.get("RT:").is_some());
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        reused.read_into(&mut r, &other, &mut scratch).unwrap();
+        assert!(reused.get("RT:").is_none());
+        assert!(reused.get("Start:").is_some());
     }
 
     fn try_read(bytes: Vec<u8>) -> Result<Option<GenericDataHeader>> {

@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::error_log::ErrorEntry;
 use crate::generic_data::{GenericDataHeader, GenericRecord};
 use crate::header::FileHeader;
-use crate::metadata::{ScanParams, StatusLogEntry};
+use crate::metadata::{ScanParams, ScanTrailer, StatusLogEntry};
 use crate::raw_file_info::RawFileInfo;
 use crate::run_header::RunHeader;
 use crate::scan_data::{
@@ -76,7 +76,19 @@ pub struct RawFileReader {
     pub scan_index: Vec<ScanIndexEntry>,
     pub scan_events: Vec<ScanEvent>,
     pub scan_parameters_header: GenericDataHeader,
+    /// Every per-scan trailer record, when the reader was asked to keep them
+    /// ([`OpenOptions::keep_scan_parameters`], on by default). Empty when it
+    /// was not; [`Self::scan_trailers`] then still holds what decoding reads.
+    ///
+    /// Decoding reads [`Self::scan_trailers`], which is taken out of these
+    /// records while the file is opened, so editing a record here does not
+    /// change what a later [`crate::scan_metadata`] or filter string says.
+    /// Edit the matching [`ScanTrailer`] for that.
     pub scan_parameters: Vec<GenericRecord>,
+    /// The trailer values decoding each scan reads, one row per scan, taken
+    /// out of [`Self::scan_parameters`] while the file was opened. Empty for
+    /// a file with no trailer stream.
+    pub scan_trailers: Vec<ScanTrailer>,
     pub error_log: Vec<ErrorEntry>,
     // Instrument log uses same structure
     pub inst_log_header: GenericDataHeader,
@@ -261,14 +273,70 @@ fn known_v66_body_sizes<R: Read + Seek>(
     Ok(None)
 }
 
+/// What a reader keeps of a file's two per-scan record streams.
+///
+/// Both are kept by default, which is what [`RawFileReader::open`] and
+/// [`RawFileReader::open_path`] do. A record stream is one
+/// [`GenericRecord`] per scan, every field with its label: on a 136k-scan
+/// Orbitrap acquisition the trailer stream alone is 8.6 million
+/// `(String, GenericValue)` pairs, 10 million allocations and about 550 MiB
+/// resident for as long as the file is open. A caller that only decodes
+/// spectra does not need them: the values decoding reads are taken out while
+/// the file is opened and kept in [`RawFileReader::scan_trailers`], 136 bytes
+/// a scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenOptions {
+    /// Keep every per-scan trailer record in
+    /// [`RawFileReader::scan_parameters`], so [`RawFileReader::scan_params`]
+    /// can hand out any field of the schema. Off: that `Vec` is left empty
+    /// and `scan_params` returns `None`, while spectra, their metadata and
+    /// their filter strings decode identically.
+    pub keep_scan_parameters: bool,
+    /// Keep every per-scan instrument-log record in
+    /// [`RawFileReader::inst_log`], for
+    /// [`RawFileReader::status_log_entry`]. Off: that `Vec` is left empty,
+    /// the stream is not read, and nothing else changes - no decoding reads
+    /// the instrument log.
+    pub keep_instrument_log: bool,
+}
+
+impl Default for OpenOptions {
+    fn default() -> Self {
+        Self {
+            keep_scan_parameters: true,
+            keep_instrument_log: true,
+        }
+    }
+}
+
+impl OpenOptions {
+    /// Keep only what decoding spectra needs: neither per-scan record
+    /// stream, which is 550 MiB and 10 million allocations less for a
+    /// 136k-scan Orbitrap file, with identical spectra, metadata and filter
+    /// strings.
+    pub fn spectra_only() -> Self {
+        Self {
+            keep_scan_parameters: false,
+            keep_instrument_log: false,
+        }
+    }
+}
+
 impl RawFileReader {
-    /// Open and parse a RAW file from a reader.
+    /// Open and parse a RAW file from a reader, keeping both per-scan record
+    /// streams ([`OpenOptions::default`]).
     pub fn open<R: Read + Seek>(source: R) -> Result<Self> {
-        Self::open_inner(source)
+        Self::open_with(source, OpenOptions::default())
+    }
+
+    /// [`Self::open`] with [`OpenOptions`]: the same file, parsed the same
+    /// way, keeping only the record streams the caller asks for.
+    pub fn open_with<R: Read + Seek>(source: R, options: OpenOptions) -> Result<Self> {
+        Self::open_inner(source, options)
             .map_err(|error| error.with_context(crate::ErrorContext::new(crate::Operation::Open)))
     }
 
-    fn open_inner<R: Read + Seek>(source: R) -> Result<Self> {
+    fn open_inner<R: Read + Seek>(source: R, options: OpenOptions) -> Result<Self> {
         let mut r = BinaryReader::new(source);
 
         // 1. FileHeader
@@ -486,7 +554,7 @@ impl RawFileReader {
         //     with NO stream preamble - records begin directly at
         //     scan_params_addr. Any bytes after the last record are trailing
         //     padding and can be ignored.
-        let (scan_parameters_header, scan_parameters) = if version >= 64 {
+        let (scan_parameters_header, scan_parameters, scan_trailers) = if version >= 64 {
             // Search from after the error log entries up to scan_trailer.
             // This skips any scan_index data that may sit in between.
             let scan_distance = run_header.scan_trailer_addr.saturating_sub(after_error_log);
@@ -509,16 +577,42 @@ impl RawFileReader {
                     // Records start directly at scan_params_addr - no stream preamble.
                     r.seek_to(run_header.scan_params_addr)?;
                     r.check_count(num_scans as u64, hdr.fixed_record_size().max(1) as u64)?;
-                    let mut params = Vec::with_capacity(num_scans as usize);
+                    // Every scan's trailer values are taken out here, so
+                    // decoding never consults the records themselves and a
+                    // caller that does not want them pays neither the
+                    // memory nor the allocations.
+                    let mut params = Vec::with_capacity(if options.keep_scan_parameters {
+                        num_scans as usize
+                    } else {
+                        0
+                    });
+                    let mut trailers = Vec::with_capacity(num_scans as usize);
+                    let mut reused = GenericRecord { values: Vec::new() };
+                    let mut scratch = Vec::new();
                     for _ in 0..num_scans {
-                        params.push(GenericRecord::read(&mut r, &hdr)?);
+                        if options.keep_scan_parameters {
+                            let record = GenericRecord::read(&mut r, &hdr)?;
+                            trailers.push(ScanTrailer::from_params(&ScanParams(&record)));
+                            params.push(record);
+                        } else {
+                            reused.read_into(&mut r, &hdr, &mut scratch)?;
+                            trailers.push(ScanTrailer::from_params(&ScanParams(&reused)));
+                        }
                     }
-                    (hdr, params)
+                    (hdr, params, trailers)
                 }
-                None => (GenericDataHeader { fields: Vec::new() }, Vec::new()),
+                None => (
+                    GenericDataHeader { fields: Vec::new() },
+                    Vec::new(),
+                    Vec::new(),
+                ),
             }
         } else {
-            (GenericDataHeader { fields: Vec::new() }, Vec::new())
+            (
+                GenericDataHeader { fields: Vec::new() },
+                Vec::new(),
+                Vec::new(),
+            )
         };
 
         // 11. Instrument log - GenericData format in v64+
@@ -528,9 +622,12 @@ impl RawFileReader {
                 Some(hdr) => {
                     let n_inst = run_header.sample_info.inst_log_length;
                     r.check_count(n_inst as u64, hdr.fixed_record_size().max(1) as u64)?;
-                    let mut log = Vec::with_capacity(n_inst as usize);
-                    for _ in 0..n_inst {
-                        log.push(GenericRecord::read(&mut r, &hdr)?);
+                    let mut log = Vec::new();
+                    if options.keep_instrument_log {
+                        log.reserve(n_inst as usize);
+                        for _ in 0..n_inst {
+                            log.push(GenericRecord::read(&mut r, &hdr)?);
+                        }
                     }
                     (hdr, log)
                 }
@@ -708,6 +805,7 @@ impl RawFileReader {
             scan_events,
             scan_parameters_header,
             scan_parameters,
+            scan_trailers,
             error_log,
             inst_log_header,
             inst_log,
@@ -734,12 +832,18 @@ impl RawFileReader {
         Ok(reader)
     }
 
-    /// Open a RAW file from a path.
+    /// Open a RAW file from a path, keeping both per-scan record streams
+    /// ([`OpenOptions::default`]).
     pub fn open_path(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        Self::open_path_with(path, OpenOptions::default())
+    }
+
+    /// [`Self::open_path`] with [`OpenOptions`].
+    pub fn open_path_with(path: impl AsRef<std::path::Path>, options: OpenOptions) -> Result<Self> {
         let path = path.as_ref();
         let result = (|| {
             let file = std::fs::File::open(path)?;
-            Self::open(std::io::BufReader::new(file))
+            Self::open_with(std::io::BufReader::new(file), options)
         })();
         result.map_err(|error: Error| {
             let mut context = crate::ErrorContext::new(crate::Operation::Open);
@@ -1101,6 +1205,19 @@ impl RawFileReader {
         self.scan_parameters(scan_number).map(ScanParams)
     }
 
+    /// The trailer values decoding this scan reads, from
+    /// [`Self::scan_trailers`].
+    ///
+    /// Unlike [`Self::scan_params`] this is there whether or not the records
+    /// were kept ([`OpenOptions::keep_scan_parameters`]), and it is what
+    /// [`crate::scan_metadata`] and the rendered scan filter read. `None`
+    /// when the file has no trailer stream or the scan is out of range.
+    pub fn scan_trailer(&self, scan_number: u32) -> Option<&ScanTrailer> {
+        let first = self.run_header.sample_info.first_scan_number;
+        let idx = scan_number.checked_sub(first)? as usize;
+        self.scan_trailers.get(idx)
+    }
+
     /// Return the raw instrument-log record for a given scan number, or
     /// `None` if the scan is out of range or no instrument log was found.
     ///
@@ -1185,12 +1302,10 @@ impl RawFileReader {
         let event = self.scan_events.get(idx)?;
         // Precursor m/z and activation energy come from the per-scan params
         // table (not the event body) for v66+. Fall back silently if missing.
-        let params = self.scan_params(scan_number);
-        let precursor = params.as_ref().and_then(|p| p.monoisotopic_mz());
-        let energy = params.as_ref().and_then(|p| p.activation_energy());
-        let supplemental = params
-            .as_ref()
-            .and_then(|p| p.supplemental_activation_energy());
+        let trailer = self.scan_trailer(scan_number);
+        let precursor = trailer.and_then(|t| t.monoisotopic_mz);
+        let energy = trailer.and_then(|t| t.activation_energy);
+        let supplemental = trailer.and_then(|t| t.supplemental_activation_energy);
         crate::scan_filter::build_filter_with_activation_into(
             event,
             entry,
@@ -1219,19 +1334,17 @@ impl RawFileReader {
     }
 
     fn source_cid_setting(&self, scan_number: u32) -> Option<(f64, &'static str)> {
-        let params = self.scan_params(scan_number)?;
-        if let Some(energy) = params.source_cid_energy_ev() {
+        let trailer = self.scan_trailer(scan_number)?;
+        if let Some(energy) = trailer.source_cid_energy_ev {
             // Do not replace a present but invalid acquisition value with a method setting.
             return (energy.is_finite() && energy >= 0.0).then_some((energy, "trailer"));
         }
-        let record = params.record();
         // A malformed source CID field is not evidence that the trailer lacks it.
-        if record.get("Source CID eV:").is_some() || record.get("API Source CID Energy:").is_some()
-        {
+        if trailer.source_cid_field_present {
             return None;
         }
-        let segment = crate::instrument_method::trailer_id(record, "Scan Segment:")?;
-        let event = crate::instrument_method::trailer_id(record, "Scan Event:")?;
+        let segment = trailer.method_scan_segment?;
+        let event = trailer.method_scan_event?;
         self.source_cid_by_method_event
             .get(&(segment, event))
             .copied()

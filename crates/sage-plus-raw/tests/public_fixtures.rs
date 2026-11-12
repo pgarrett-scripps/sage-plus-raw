@@ -270,6 +270,12 @@ fn faims_requires_explicit_enablement_and_preserves_active_zero() {
         if let Some(enabled) = enabled {
             params.push(("FAIMS Voltage On:".into(), enabled));
         }
+        // Decoding reads the compact trailer row, taken out of the record
+        // while the file was opened, so an edited record reaches it the way
+        // the open loop puts it there.
+        raw.scan_trailers[0] = sage_plus_raw::ScanTrailer::from_params(&sage_plus_raw::ScanParams(
+            &raw.scan_parameters[0],
+        ));
         assert_eq!(
             sage_plus_raw::scan_metadata(&raw, 0).unwrap().faims_cv,
             expected
@@ -459,6 +465,96 @@ fn one_handle_decodes_what_two_handles_do() {
                     assert!(mz.is_empty() && intensity.is_empty());
                 }
                 (expected, found) => panic!("{name} scan index {idx}: {expected:?} vs {found:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires downloaded public fixtures, run by CI"]
+fn dropping_the_per_scan_records_decodes_the_same_spectra() {
+    // `OpenOptions::spectra_only` leaves the per-scan trailer and
+    // instrument-log records unparsed, which is what makes a concurrent
+    // five-file search hold hundreds of megabytes less. Everything decoding
+    // reads from a trailer record is taken out while the file is opened, so
+    // every scan's metadata, filter string and peak arrays must come out
+    // byte for byte as they do with the records kept.
+    for name in [
+        "BSA-FT-ETD.raw",
+        "BSA-FT-HCD.raw",
+        "FT-HCD-MSX.raw",
+        "IsolationMzOffset-ReportedMassOffset.raw",
+        "IT-HCD-SPS.raw",
+        "source_cid_test_3scans.raw",
+    ] {
+        let path = fixture(name);
+        let kept = RawFileReader::open_path(&path).unwrap();
+        let dropped =
+            RawFileReader::open_path_with(&path, sage_plus_raw::OpenOptions::spectra_only())
+                .unwrap();
+        assert!(!kept.scan_parameters.is_empty(), "{name}");
+        assert!(dropped.scan_parameters.is_empty(), "{name}");
+        assert!(dropped.inst_log.is_empty(), "{name}");
+        // The compact table is there either way, and is the same table.
+        assert_eq!(kept.scan_trailers.len(), kept.num_scans as usize, "{name}");
+        assert_eq!(kept.scan_trailers, dropped.scan_trailers, "{name}");
+        assert_eq!(
+            dropped.scan_parameters_header.fields.len(),
+            kept.scan_parameters_header.fields.len(),
+            "{name}"
+        );
+
+        for scan_number in kept.run_header.sample_info.first_scan_number
+            ..=kept.run_header.sample_info.last_scan_number
+        {
+            assert_eq!(
+                kept.scan_filter(scan_number),
+                dropped.scan_filter(scan_number),
+                "{name} scan {scan_number}"
+            );
+            assert_eq!(
+                kept.source_cid_energy_ev(scan_number),
+                dropped.source_cid_energy_ev(scan_number),
+                "{name} scan {scan_number}"
+            );
+            assert_eq!(
+                kept.source_cid_energy_source(scan_number),
+                dropped.source_cid_energy_source(scan_number),
+                "{name} scan {scan_number}"
+            );
+        }
+        for idx in 0..kept.num_scans {
+            assert_eq!(
+                format!("{:?}", sage_plus_raw::scan_metadata(&kept, idx)),
+                format!("{:?}", sage_plus_raw::scan_metadata(&dropped, idx)),
+                "{name} scan index {idx}"
+            );
+        }
+        for include_profile in [false, true] {
+            let mut with_records = sage_plus_raw::SpectrumReader::open_path(&path).unwrap();
+            let mut without = sage_plus_raw::SpectrumReader::open_path_with(
+                &path,
+                sage_plus_raw::OpenOptions::spectra_only(),
+            )
+            .unwrap();
+            for idx in 0..kept.num_scans {
+                let expected = with_records.read_spectrum(idx, include_profile);
+                let found = without.read_spectrum(idx, include_profile);
+                match (expected, found) {
+                    (Ok(expected), Ok(found)) => assert_eq!(
+                        format!("{expected:?}"),
+                        format!("{found:?}"),
+                        "{name} scan index {idx}"
+                    ),
+                    (Err(expected), Err(found)) => assert_eq!(
+                        expected.to_string(),
+                        found.to_string(),
+                        "{name} scan index {idx}"
+                    ),
+                    (expected, found) => {
+                        panic!("{name} scan index {idx}: {expected:?} vs {found:?}")
+                    }
+                }
             }
         }
     }

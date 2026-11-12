@@ -275,11 +275,22 @@ impl<'a> ScanParams<'a> {
     pub fn faims_voltage_on(&self) -> Option<bool> {
         match self.0.get("FAIMS Voltage On:")? {
             GenericValue::Bool(b) => Some(*b),
-            GenericValue::String(s) => match s.trim().to_ascii_lowercase().as_str() {
-                "on" | "true" => Some(true),
-                "off" | "false" => Some(false),
-                _ => None,
-            },
+            GenericValue::String(s) => {
+                // Compared in place: this is read once per scan while a file
+                // is opened, and lowercasing it allocated a `String` each
+                // time.
+                let text = s.trim();
+                if ["on", "true"].iter().any(|v| text.eq_ignore_ascii_case(v)) {
+                    Some(true)
+                } else if ["off", "false"]
+                    .iter()
+                    .any(|v| text.eq_ignore_ascii_case(v))
+                {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -424,6 +435,81 @@ impl<'a> ScanParams<'a> {
         self.0
             .get_string("HCD Energy:")
             .or_else(|| self.0.get_string("HCD Energy V:"))
+    }
+}
+
+// -- Compact per-scan trailer values --
+
+/// The trailer values decoding one scan reads, extracted while the file is
+/// opened: what [`crate::scan_metadata`], the rendered scan filter and
+/// [`crate::RawFileReader::source_cid_energy_ev`] consult a scan's
+/// [`ScanParams`] for.
+///
+/// A file's trailer stream is one [`GenericRecord`] per scan, each carrying
+/// every field of the stream's schema together with that field's label: on a
+/// 136k-scan Orbitrap file, 8.6 million `(String, GenericValue)` pairs and
+/// about 550 MiB resident while the file is read. This is the part the
+/// decoders use, 136 bytes a scan, so a reader opened with
+/// [`crate::OpenOptions::spectra_only`] can drop the records and still
+/// decode byte-identical spectra and filter strings.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ScanTrailer {
+    /// [`ScanParams::isolation_target_mz`].
+    pub isolation_target_mz: Option<f64>,
+    /// [`ScanParams::monoisotopic_mz`].
+    pub monoisotopic_mz: Option<f64>,
+    /// [`ScanParams::isolation_width_mz`].
+    pub isolation_width_mz: Option<f64>,
+    /// [`ScanParams::charge_state`].
+    pub charge_state: Option<i32>,
+    /// [`ScanParams::activation_energy`].
+    pub activation_energy: Option<f64>,
+    /// [`ScanParams::activation_energy_is_nce`].
+    pub activation_energy_is_nce: bool,
+    /// [`ScanParams::supplemental_activation_energy`].
+    pub supplemental_activation_energy: Option<f64>,
+    /// [`ScanParams::master_scan_number`].
+    pub master_scan_number: Option<i32>,
+    /// [`ScanParams::ion_injection_time_ms`].
+    pub ion_injection_time_ms: Option<f64>,
+    /// [`ScanParams::faims_voltage_on`].
+    pub faims_voltage_on: Option<bool>,
+    /// [`ScanParams::faims_cv`].
+    pub faims_cv: Option<f64>,
+    /// [`ScanParams::source_cid_energy_ev`].
+    pub source_cid_energy_ev: Option<f64>,
+    /// Whether the record carried a source-CID energy field at all, however
+    /// it was typed: a malformed one is not evidence that the trailer lacks
+    /// it, so it still blocks the instrument method's declared value.
+    pub source_cid_field_present: bool,
+    /// `"Scan Segment:"`, the method event id this scan names.
+    pub method_scan_segment: Option<u16>,
+    /// `"Scan Event:"`, the method event id this scan names.
+    pub method_scan_event: Option<u16>,
+}
+
+impl ScanTrailer {
+    /// Read one scan's values out of its trailer record.
+    pub fn from_params(params: &ScanParams<'_>) -> Self {
+        let record = params.record();
+        Self {
+            isolation_target_mz: params.isolation_target_mz(),
+            monoisotopic_mz: params.monoisotopic_mz(),
+            isolation_width_mz: params.isolation_width_mz(),
+            charge_state: params.charge_state(),
+            activation_energy: params.activation_energy(),
+            activation_energy_is_nce: params.activation_energy_is_nce(),
+            supplemental_activation_energy: params.supplemental_activation_energy(),
+            master_scan_number: params.master_scan_number(),
+            ion_injection_time_ms: params.ion_injection_time_ms(),
+            faims_voltage_on: params.faims_voltage_on(),
+            faims_cv: params.faims_cv(),
+            source_cid_energy_ev: params.source_cid_energy_ev(),
+            source_cid_field_present: record.get("Source CID eV:").is_some()
+                || record.get("API Source CID Energy:").is_some(),
+            method_scan_segment: crate::instrument_method::trailer_id(record, "Scan Segment:"),
+            method_scan_event: crate::instrument_method::trailer_id(record, "Scan Event:"),
+        }
     }
 }
 

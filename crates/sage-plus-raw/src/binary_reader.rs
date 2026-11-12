@@ -84,6 +84,34 @@ impl<R: Read + Seek> BinaryReader<R> {
         Ok(buf)
     }
 
+    /// [`Self::read_bytes`] into a buffer the caller keeps between calls,
+    /// for a field read once per record in a stream of many: the same
+    /// allocation bound and the same errors, without a `Vec` per field. The
+    /// returned slice is the first `n` bytes of `scratch`; the rest of it is
+    /// whatever an earlier call left there.
+    pub(crate) fn read_bytes_scratch<'a>(
+        &mut self,
+        scratch: &'a mut Vec<u8>,
+        n: usize,
+    ) -> Result<&'a [u8]> {
+        self.check_count(n as u64, 1)?;
+        if scratch.len() < n {
+            scratch.resize(n, 0);
+        }
+        self.inner.read_exact(&mut scratch[..n]).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                Error::UnexpectedEof {
+                    offset: self.pos,
+                    needed: n,
+                }
+            } else {
+                Error::Io(e)
+            }
+        })?;
+        self.pos += n as u64;
+        Ok(&scratch[..n])
+    }
+
     pub fn read_bytes_into(&mut self, buf: &mut [u8]) -> Result<()> {
         let n = buf.len();
         self.inner.read_exact(buf).map_err(|e| {
@@ -272,21 +300,34 @@ impl<R: Read + Seek> BinaryReader<R> {
     }
 
     /// Like [`Self::read_utf16_fixed`], but replaces invalid UTF-16 (e.g.
-    /// unpaired surrogates) with U+FFFD instead of failing. Used for
-    /// free-text values such as trailer strings, where one bad character
-    /// should not make the whole file unreadable.
-    pub fn read_utf16_fixed_lossy(&mut self, byte_len: usize) -> Result<String> {
+    /// unpaired surrogates) with U+FFFD instead of failing, and writes into
+    /// a `String` the caller keeps between calls, reading the bytes through
+    /// `scratch`. Used for free-text values such as trailer strings, where
+    /// one bad character should not make the whole file unreadable, and
+    /// where the field is read once per scan. `out` is cleared first and is
+    /// left empty on an error.
+    pub(crate) fn read_utf16_fixed_lossy_into(
+        &mut self,
+        byte_len: usize,
+        scratch: &mut Vec<u8>,
+        out: &mut String,
+    ) -> Result<()> {
+        out.clear();
         let pos = self.pos;
-        let raw = self.read_bytes(byte_len)?;
+        let raw = self.read_bytes_scratch(scratch, byte_len)?;
         if byte_len % 2 != 0 {
             return Err(Error::InvalidUtf16(pos));
         }
-        let units: Vec<u16> = raw
+        // Same text as `String::from_utf16_lossy` of the units before the
+        // first NUL: an unpaired surrogate becomes U+FFFD.
+        let units = raw
             .chunks_exact(2)
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
-        Ok(String::from_utf16_lossy(&units[..end]))
+            .take_while(|&u| u != 0);
+        for decoded in char::decode_utf16(units) {
+            out.push(decoded.unwrap_or(char::REPLACEMENT_CHARACTER));
+        }
+        Ok(())
     }
 
     /// Read a PascalStringWin32: UInt32 char count, then that many UTF-16-LE code units.
@@ -415,9 +456,10 @@ mod tests {
     #[test]
     fn utf16_fixed_stays_strict_about_unpaired_surrogates() {
         // Only schema-driven trailer values decode lossily
-        // (`read_utf16_fixed_lossy`, used by `GenericRecord::read`). Fixed
-        // structural strings keep rejecting invalid UTF-16, so a corrupt
-        // structural field is still an error rather than a silent U+FFFD.
+        // (`read_utf16_fixed_lossy_into`, used by `GenericRecord::read`).
+        // Fixed structural strings keep rejecting invalid UTF-16, so a
+        // corrupt structural field is still an error rather than a silent
+        // U+FFFD.
         let mut bytes = Vec::new();
         for u in [0x0041u16, 0xD800, 0x0042, 0x0000] {
             bytes.extend_from_slice(&u.to_le_bytes());
@@ -425,7 +467,38 @@ mod tests {
         let mut r = BinaryReader::new(Cursor::new(bytes.clone()));
         assert!(matches!(r.read_utf16_fixed(8), Err(Error::InvalidUtf16(0))));
         let mut r = BinaryReader::new(Cursor::new(bytes));
-        assert_eq!(r.read_utf16_fixed_lossy(8).unwrap(), "A\u{FFFD}B");
+        let (mut scratch, mut out) = (Vec::new(), String::from("left over"));
+        r.read_utf16_fixed_lossy_into(8, &mut scratch, &mut out)
+            .unwrap();
+        assert_eq!(out, "A\u{FFFD}B");
+    }
+
+    #[test]
+    fn a_reused_string_and_scratch_decode_the_same_text() {
+        // What the trailer loop relies on: reading over a `String` that
+        // already holds a longer value leaves exactly the new text, and an
+        // odd byte length is still rejected after the bytes are consumed.
+        let mut bytes = Vec::new();
+        for u in [0x0041u16, 0x0042, 0x0000, 0x0043] {
+            bytes.extend_from_slice(&u.to_le_bytes());
+        }
+        let (mut scratch, mut out) = (Vec::new(), String::new());
+        let mut r = BinaryReader::new(Cursor::new(bytes.clone()));
+        r.read_utf16_fixed_lossy_into(8, &mut scratch, &mut out)
+            .unwrap();
+        assert_eq!(out, "AB");
+        let capacity = out.capacity();
+        let mut r = BinaryReader::new(Cursor::new(bytes.clone()));
+        r.read_utf16_fixed_lossy_into(4, &mut scratch, &mut out)
+            .unwrap();
+        assert_eq!(out, "AB");
+        assert_eq!(out.capacity(), capacity);
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert!(matches!(
+            r.read_utf16_fixed_lossy_into(3, &mut scratch, &mut out),
+            Err(Error::InvalidUtf16(0))
+        ));
+        assert!(out.is_empty());
     }
 
     /// A `Cursor` that counts the seeks reaching it.
