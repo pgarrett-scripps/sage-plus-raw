@@ -57,6 +57,19 @@ cargo run --locked -p sage-plus-raw --example strict_read -- acquisition.raw
 - Unreadable scans return errors with operation, scan and byte-offset context (`Error::kind`, `Error::context`, `Error::root_cause`).
 - Activation is reported only when qualified (v66 reaction tags 11 = HCD, 9 = ETD). Nondependent MS2 is not evidence of DIA; `is_dia` is a legacy heuristic.
 
+## Examples
+
+Six programs in `crates/sage-plus-raw/examples`, each taking a path to a `.raw` file. Run one with `cargo run --release --locked -p sage-plus-raw --example <name> -- <args>`.
+
+- `dump <file.raw> [--max-scans N]` prints the file header, instrument, sequence row, run header, the first scan index entries and scan events, scan 1's parameters, the error log and the first scans' peaks: the quickest look at what a file contains.
+- `strict_read <file.raw>` streams every spectrum and stops at the first decoding error, printing scan number, MS level and peak count per scan.
+- `review_metadata <file.raw>` prints the trailer and scan-parameter addresses, the MS-level histogram and the first events' reactions and calibration coefficients.
+- `reader_benchmark <file.raw> [REPEATS] [SEED] [--profile]` prints JSON timings for opening the file and for sequential and shuffled scan reads.
+- `reuse_buffers <file.raw> [REPEATS] [SCANS] [--profile]` prints JSON timings for fresh-allocation against reused-buffer decoding (`try_extract_spectrum` against `try_extract_spectrum_into`), the pattern a downstream reader loop uses.
+- `single_handle <file.raw> [REPEATS] [--profile]` prints JSON timings for two handles on the same path against one owned handle (`try_iter_spectra` against `iter_spectra_from_path`).
+
+`reuse_buffers` and `single_handle` each assert that the two paths they compare decoded the same number of peaks, so they are a consistency check as well as a benchmark. The three timing examples take `--profile` as their last argument to decode profile spectra instead of centroids.
+
 ## Validation
 
 ```sh

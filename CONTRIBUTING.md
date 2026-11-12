@@ -17,6 +17,8 @@ python3 scripts/prepare_reference_arrays.py
 THERMO_PUBLIC_CORPUS=corpus/public cargo test --locked -p sage-plus-raw --test public_fixtures -- --ignored
 ```
 
+The examples in `crates/sage-plus-raw/examples` are listed, with what each one prints and the command line it takes, in the [Examples section of the README](README.md#examples); `--all-targets` builds them, so they are compiled by the clippy, test and MSRV checks. Use strict extraction APIs in a new one, and add it to that list.
+
 The native crate forbids unsafe code. Use strict extraction APIs in new examples and integrations. Record user-visible changes in `CHANGELOG.md`.
 
 ## Evidence and provenance
