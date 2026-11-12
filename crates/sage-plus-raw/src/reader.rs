@@ -285,6 +285,7 @@ fn known_v66_body_sizes<R: Read + Seek>(
 /// the file is opened and kept in [`RawFileReader::scan_trailers`], 136 bytes
 /// a scan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct OpenOptions {
     /// Keep every per-scan trailer record in
     /// [`RawFileReader::scan_parameters`], so [`RawFileReader::scan_params`]
@@ -296,7 +297,9 @@ pub struct OpenOptions {
     /// [`RawFileReader::inst_log`], for
     /// [`RawFileReader::status_log_entry`]. Off: that `Vec` is left empty,
     /// the stream is not read, and nothing else changes - no decoding reads
-    /// the instrument log.
+    /// the instrument log. A corrupt instrument-log record is then not read
+    /// either, so it cannot fail the open, while a corrupt trailer record
+    /// still does: the trailer stream is read for its values either way.
     pub keep_instrument_log: bool,
 }
 

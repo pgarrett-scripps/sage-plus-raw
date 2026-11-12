@@ -453,6 +453,7 @@ impl<'a> ScanParams<'a> {
 /// [`crate::OpenOptions::spectra_only`] can drop the records and still
 /// decode byte-identical spectra and filter strings.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[non_exhaustive]
 pub struct ScanTrailer {
     /// [`ScanParams::isolation_target_mz`].
     pub isolation_target_mz: Option<f64>,
