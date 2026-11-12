@@ -79,3 +79,105 @@ impl ScanIndexEntry {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// The bytes of one scan-index entry as `version` writes them.
+    ///
+    /// Common to every version: a 32-bit offset, the index, the event and
+    /// segment words, two unused words, the data size, then six f64 fields.
+    /// From v64 a 64-bit offset follows and supersedes the 32-bit one; v66
+    /// adds two trailing words.
+    fn entry_bytes(version: u32, offset_32: u32, offset_64: u64) -> Vec<u8> {
+        let mut bytes = offset_32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&7u32.to_le_bytes()); // index
+        bytes.extend_from_slice(&2u16.to_le_bytes()); // scan_event
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // scan_segment
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // next
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // unk
+        bytes.extend_from_slice(&1234u32.to_le_bytes()); // data_size
+        for value in [12.5f64, 1.0e6, 5.0e5, 445.12, 100.0, 1500.0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        if version >= 64 {
+            bytes.extend_from_slice(&offset_64.to_le_bytes());
+        }
+        if version >= 66 {
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+        }
+        bytes
+    }
+
+    /// Every field but the offset is at the same place in every version.
+    fn assert_common_fields(entry: &ScanIndexEntry) {
+        assert_eq!(entry.index, 7);
+        assert_eq!(entry.scan_event, 2);
+        assert_eq!(entry.scan_segment, 1);
+        assert_eq!(entry.data_size, 1234);
+        assert_eq!(entry.start_time, 12.5);
+        assert_eq!(entry.total_current, 1.0e6);
+        assert_eq!(entry.base_intensity, 5.0e5);
+        assert_eq!(entry.base_mz, 445.12);
+        assert_eq!(entry.low_mz, 100.0);
+        assert_eq!(entry.high_mz, 1500.0);
+    }
+
+    #[test]
+    fn read_pre_v64_takes_the_offset_from_the_32_bit_field() {
+        let bytes = entry_bytes(63, 4096, 0);
+        let written = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let entry = ScanIndexEntry::read(&mut r, 63).unwrap();
+        assert_common_fields(&entry);
+        assert_eq!(entry.offset, 4096);
+        assert_eq!(written, 72);
+        // What the allocation bound in `RawFileReader::open` relies on: an
+        // entry never takes fewer bytes than the bound assumes.
+        assert!(r.position() >= ScanIndexEntry::min_size_for_version(63));
+    }
+
+    #[test]
+    fn read_v64_takes_the_offset_from_the_64_bit_field() {
+        // The 32-bit field is left at a value the 64-bit one must override,
+        // so a reader that ignored the wider field would be caught.
+        let bytes = entry_bytes(64, 4096, 8_589_934_592);
+        let written = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let entry = ScanIndexEntry::read(&mut r, 64).unwrap();
+        assert_common_fields(&entry);
+        assert_eq!(entry.offset, 8_589_934_592);
+        assert_eq!(written, 80);
+        assert!(r.position() >= ScanIndexEntry::min_size_for_version(64));
+    }
+
+    #[test]
+    fn read_v66_takes_the_64_bit_offset_and_consumes_the_trailing_words() {
+        let bytes = entry_bytes(66, 4096, 8_589_934_592);
+        let written = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let entry = ScanIndexEntry::read(&mut r, 66).unwrap();
+        assert_common_fields(&entry);
+        assert_eq!(entry.offset, 8_589_934_592);
+        assert_eq!(written, 88);
+        // The two trailing words are part of the entry: the next entry
+        // starts after them, so the reader must have consumed them.
+        assert_eq!(r.position(), written);
+        assert!(r.position() >= ScanIndexEntry::min_size_for_version(66));
+    }
+
+    #[test]
+    fn read_rejects_an_entry_that_ends_early() {
+        let mut bytes = entry_bytes(66, 4096, 8_589_934_592);
+        bytes.truncate(bytes.len() - 4); // one trailing word short
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let error = ScanIndexEntry::read(&mut r, 66).unwrap_err();
+        assert!(
+            matches!(error, crate::Error::UnexpectedEof { .. }),
+            "got {error:?}"
+        );
+    }
+}
