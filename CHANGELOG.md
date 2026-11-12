@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-11
+
 - `try_extract_spectrum_into` decodes a scan into caller-owned m/z and intensity buffers and returns the rest as a `SpectrumHeader`, which `SpectrumHeader::into_record` rejoins with the arrays, so a loop over a file allocates its peak arrays once instead of once per scan. `try_extract_spectrum` and `try_extract_spectrum_arrays` keep their signatures and now share that path; peaks are validated as the buffers fill rather than in a pass afterwards.
 - `iter_spectra_from_path` and `SpectrumReader` read spectra through the handle the file was parsed with, so a caller no longer carries a second handle on the same path, and `SpectrumReader` also reads a single scan by index or into caller-owned buffers. The decoded records are those `try_iter_spectra` produces for the same file.
-- A per-scan reader is told where the scan starts and how long the file is (`RawFileReader::file_len`, read once while opening it), instead of seeking to the end of the file and back for the length and asking the stream its position again for every bounded read. Allocation caps and reported error offsets are unchanged; the seeks per scan drop from six to one on every reading path, including an existing caller's.
+- A per-scan reader is told where the scan starts and how long the file is (`RawFileReader::file_len`, read once while opening it), instead of seeking to the end of the file and back for the length and asking the stream its position again for every bounded read. Allocation caps and reported error offsets are unchanged; the seeks per scan drop from six to two on every reading path, including an existing caller's.
+- Each scan's peak, label, noise and profile records are read in one go into a buffer reused across scans and parsed from those bytes at fixed offsets, instead of one four-byte read per field: about 2,364 reads per scan become one per record block, and the buffer is grown, never cleared. Decoded m/z and intensity values, allocation caps and reported error offsets are unchanged. Over 20,000 scans of a 67,599-scan Q Exactive acquisition, centroid decoding goes from 0.190 to 0.147 s and profile decoding of 8,000 scans from 1.78 to 0.92 s.
 - `RawFileReader::scan_filter_into` and `scan_filter::build_filter_into` render a scan filter into a caller-owned `String`, and the renderer writes each field directly into it instead of building a temporary `String` per field and a `Vec` of reaction masses per scan. The rendered bytes are unchanged.
 
 ## [0.1.1] - 2026-11-09
