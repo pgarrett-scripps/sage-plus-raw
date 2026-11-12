@@ -441,6 +441,7 @@ pub fn read_flat_peaks<R: Read + Seek>(
     // Try peak_count = data_size - 1 first, then data_size - 2 as fallback.
     // Each peak occupies 9 bytes total: 8 bytes (f32 mz + f32 int) + 1 flag byte.
     // The peaks section is at the end of the record.
+    let mut scratch = Vec::new();
     for subtract in [1u32, 2] {
         if data_size <= subtract {
             continue;
@@ -460,12 +461,17 @@ pub fn read_flat_peaks<R: Read + Seek>(
         source.seek(SeekFrom::Start(peaks_start))?;
         let mut r = BinaryReader::new(&mut *source);
 
-        r.check_count(peak_count as u64, 8)?;
+        // The whole peak section in one read, then parsed from the bytes,
+        // as the PacketHeader peak list is: a field at a time is two reads
+        // per peak. `read_items_into` applies the same `check_count`
+        // allocation bound (`peak_count` items of 8 bytes) this loop did.
+        let block = r.read_items_into(&mut scratch, peak_count, 8)?;
         let mut peaks = Vec::with_capacity(peak_count);
-        for _ in 0..peak_count {
-            let mz = r.read_f32()? as f64;
-            let abundance = r.read_f32()?;
-            peaks.push(Peak { mz, abundance });
+        for item in block.chunks_exact(8) {
+            peaks.push(Peak {
+                mz: f64::from(f32::from_le_bytes([item[0], item[1], item[2], item[3]])),
+                abundance: f32::from_le_bytes([item[4], item[5], item[6], item[7]]),
+            });
         }
 
         // Validate: first peak mz should be a plausible mass value (or zero for empty transitions)
@@ -522,14 +528,19 @@ pub fn read_scan_srm_v66<R: Read + Seek>(
     // Skip m/z window table: n_peaks × 8 bytes (lo_mz f32 + hi_mz f32 per channel)
     r.skip(n_peaks * 8)?;
 
-    // Read peak records: (u32 channel_idx, f32 mz, f32 intensity) × n_peaks
-    r.check_count(n_peaks as u64, 12)?;
+    // Read peak records: (u32 channel_idx, f32 mz, f32 intensity) × n_peaks.
+    // The whole table in one read, then parsed from the bytes;
+    // `read_items_into` applies the same `check_count` allocation bound
+    // (`n_peaks` items of 12 bytes) the field-at-a-time loop did.
+    let mut scratch = Vec::new();
+    let block = r.read_items_into(&mut scratch, n_peaks, 12)?;
     let mut peaks = Vec::with_capacity(n_peaks);
-    for _ in 0..n_peaks {
-        let _channel = r.read_u32()?;
-        let mz = r.read_f32()? as f64;
-        let abundance = r.read_f32()?;
-        peaks.push(Peak { mz, abundance });
+    for item in block.chunks_exact(12) {
+        // Bytes 0-3 are the channel index, which this reader does not use.
+        peaks.push(Peak {
+            mz: f64::from(f32::from_le_bytes([item[4], item[5], item[6], item[7]])),
+            abundance: f32::from_le_bytes([item[8], item[9], item[10], item[11]]),
+        });
     }
 
     Ok(peaks)
@@ -559,13 +570,18 @@ pub fn read_scan_srm_v66_windows<R: Read + Seek>(
     // Skip remaining header: bytes 4-31 (28 bytes)
     r.skip(28)?;
 
-    // Read m/z window table: n_peaks × 8 bytes (lo_mz f32, hi_mz f32)
-    r.check_count(n_peaks as u64, 8)?;
+    // Read m/z window table: n_peaks × 8 bytes (lo_mz f32, hi_mz f32).
+    // One read for the table, then parsed from the bytes;
+    // `read_items_into` applies the same `check_count` allocation bound
+    // (`n_peaks` items of 8 bytes) the field-at-a-time loop did.
+    let mut scratch = Vec::new();
+    let block = r.read_items_into(&mut scratch, n_peaks, 8)?;
     let mut windows = Vec::with_capacity(n_peaks);
-    for _ in 0..n_peaks {
-        let lo = r.read_f32()?;
-        let hi = r.read_f32()?;
-        windows.push((lo, hi));
+    for item in block.chunks_exact(8) {
+        windows.push((
+            f32::from_le_bytes([item[0], item[1], item[2], item[3]]),
+            f32::from_le_bytes([item[4], item[5], item[6], item[7]]),
+        ));
     }
 
     Ok(windows)
@@ -884,6 +900,108 @@ mod tests {
         let mut cursor = Cursor::new(bytes);
         let windows = read_scan_srm_v66_windows(&mut cursor, 0, 0).unwrap();
         assert_eq!(windows, vec![(1.0, 2.0), (3.0, 4.0)]);
+    }
+
+    #[test]
+    fn read_flat_peaks_decodes_every_peak_of_a_multi_peak_record() {
+        // The block read must decode the same (mz, abundance) pairs, in the
+        // same order, that the field-at-a-time read did.
+        let expected = [(500.0f32, 10.0f32), (600.5, 2.5), (700.25, 0.0)];
+        let mut bytes = vec![0u8; 32]; // leading padding
+        for (mz, abundance) in expected {
+            bytes.extend_from_slice(&mz.to_le_bytes());
+            bytes.extend_from_slice(&abundance.to_le_bytes());
+        }
+        // One trailing flag byte per peak: the section this reader seeks to
+        // is `peak_count * 9` bytes from the end of the record.
+        bytes.extend_from_slice(&[0u8; 3]);
+        let cum_end = bytes.len() as u64;
+        let mut cursor = Cursor::new(bytes);
+        let peaks = read_flat_peaks(&mut cursor, 0, cum_end, expected.len() as u32 + 1).unwrap();
+        assert_eq!(peaks.len(), expected.len());
+        for (peak, (mz, abundance)) in peaks.iter().zip(expected) {
+            assert_eq!((peak.mz, peak.abundance), (f64::from(mz), abundance));
+        }
+    }
+
+    #[test]
+    fn read_flat_peaks_rejects_a_peak_section_past_the_end_of_the_file() {
+        // The scan index claims a record ending at byte 100 of a 30-byte
+        // file, so the peak section starts past the end. This reader is
+        // built on `BinaryReader::new`, which knows the real stream length,
+        // so the allocation bound rejects the count before any byte of the
+        // block is read, exactly as the field-at-a-time loop's `check_count`
+        // did.
+        let mut bytes = Vec::new();
+        for mz in [500.0f32, 600.0] {
+            bytes.extend_from_slice(&mz.to_le_bytes());
+            bytes.extend_from_slice(&1.0f32.to_le_bytes());
+        }
+        bytes.extend_from_slice(&700.0f32.to_le_bytes()); // half of peak three
+        assert_eq!(bytes.len(), 20);
+        let mut cursor = Cursor::new(bytes);
+        let error = read_flat_peaks(&mut cursor, 0, 100, 4).unwrap_err();
+        assert!(
+            matches!(error, Error::AllocationTooLarge { .. }),
+            "got {error:?}"
+        );
+    }
+
+    #[test]
+    fn read_scan_srm_v66_decodes_every_peak_of_a_multi_peak_record() {
+        let expected = [(105.0f32, 42.0f32), (205.5, 1.5), (305.25, 0.0)];
+        let mut bytes = (expected.len() as u32).to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[0u8; 28]);
+        for index in 0..expected.len() {
+            // m/z window table: one (lo, hi) pair per channel.
+            bytes.extend_from_slice(&(index as f32).to_le_bytes());
+            bytes.extend_from_slice(&(index as f32 + 1.0).to_le_bytes());
+        }
+        for (index, (mz, abundance)) in expected.iter().enumerate() {
+            bytes.extend_from_slice(&(index as u32).to_le_bytes()); // channel
+            bytes.extend_from_slice(&mz.to_le_bytes());
+            bytes.extend_from_slice(&abundance.to_le_bytes());
+        }
+        let mut cursor = Cursor::new(bytes);
+        let peaks = read_scan_srm_v66(&mut cursor, 0, 0, 0).unwrap();
+        assert_eq!(peaks.len(), expected.len());
+        for (peak, (mz, abundance)) in peaks.iter().zip(expected) {
+            assert_eq!((peak.mz, peak.abundance), (f64::from(mz), abundance));
+        }
+    }
+
+    #[test]
+    fn read_scan_srm_v66_rejects_a_record_that_ends_mid_peak() {
+        // Two transitions declared, one peak record and a third of the next.
+        let mut bytes = 2u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[0u8; 28]);
+        bytes.extend_from_slice(&[0u8; 16]); // two (lo, hi) window pairs
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&105.0f32.to_le_bytes());
+        bytes.extend_from_slice(&42.0f32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // channel of peak two only
+        let mut cursor = Cursor::new(bytes);
+        let error = read_scan_srm_v66(&mut cursor, 0, 0, 0).unwrap_err();
+        assert!(
+            matches!(error, Error::AllocationTooLarge { .. }),
+            "got {error:?}"
+        );
+    }
+
+    #[test]
+    fn read_scan_srm_v66_windows_rejects_a_table_that_ends_mid_pair() {
+        // Two pairs declared, one pair and half of the next present.
+        let mut bytes = 2u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[0u8; 28]);
+        bytes.extend_from_slice(&1.0f32.to_le_bytes());
+        bytes.extend_from_slice(&2.0f32.to_le_bytes());
+        bytes.extend_from_slice(&3.0f32.to_le_bytes());
+        let mut cursor = Cursor::new(bytes);
+        let error = read_scan_srm_v66_windows(&mut cursor, 0, 0).unwrap_err();
+        assert!(
+            matches!(error, Error::AllocationTooLarge { .. }),
+            "got {error:?}"
+        );
     }
 
     #[test]
