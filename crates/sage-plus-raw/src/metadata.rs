@@ -556,6 +556,297 @@ mod tests {
     use super::*;
     use crate::generic_data::GenericValue;
 
+    /// A record holding exactly the given labels.
+    fn record_of(values: &[(&str, GenericValue)]) -> GenericRecord {
+        GenericRecord {
+            values: values
+                .iter()
+                .map(|(label, value)| ((*label).into(), value.clone()))
+                .collect(),
+        }
+    }
+
+    /// Every f64 accessor that reads one label, with no fallback label and
+    /// no value filtering: (label, accessor).
+    #[allow(clippy::type_complexity)]
+    const F64_ACCESSORS: &[(&str, fn(&ScanParams) -> Option<f64>)] = &[
+        ("Elapsed Scan Time (sec):", |p| p.elapsed_scan_time_s()),
+        ("Max. Ion Time (ms):", |p| p.max_ion_time_ms()),
+        ("Target M/Z:", |p| p.isolation_target_mz()),
+        ("MS2 Isolation Offset:", |p| p.isolation_offset_mz()),
+        ("S-Lens RF Level:", |p| p.s_lens_rf_level()),
+        ("AGC Fill:", |p| p.agc_fill()),
+        ("Analyzer Temperature:", |p| p.analyzer_temperature()),
+        ("PS Inj. Time (ms):", |p| p.ps_injection_time_ms()),
+        ("Dynamic RT Shift (min):", |p| p.dynamic_rt_shift_min()),
+        ("Conversion Parameter A:", |p| p.conversion_parameter_a()),
+        ("Conversion Parameter B:", |p| p.conversion_parameter_b()),
+        ("Conversion Parameter C:", |p| p.conversion_parameter_c()),
+        ("RawOvFtT:", |p| p.raw_ovft()),
+        ("Error in isotopic envelope fit:", |p| {
+            p.isotopic_fit_error()
+        }),
+    ];
+
+    /// Every i32 accessor that reads one label, with no fallback.
+    #[allow(clippy::type_complexity)]
+    const I32_ACCESSORS: &[(&str, fn(&ScanParams) -> Option<i32>)] = &[
+        ("Micro Scan Count:", |p| p.micro_scan_count()),
+        ("Master Scan Number:", |p| p.master_scan_number()),
+        ("AGC Target:", |p| p.agc_target()),
+    ];
+
+    #[test]
+    fn single_label_accessors_read_their_own_field() {
+        for (label, accessor) in F64_ACCESSORS {
+            let record = record_of(&[(label, GenericValue::Float64(1.25))]);
+            assert_eq!(accessor(&ScanParams(&record)), Some(1.25), "{label}");
+            // A field of the wrong type is not read as a number.
+            let mistyped = record_of(&[(label, GenericValue::String("1.25".into()))]);
+            assert_eq!(accessor(&ScanParams(&mistyped)), None, "{label} mistyped");
+            // No other accessor in the table answers for this label.
+            for (other_label, other) in F64_ACCESSORS {
+                if other_label != label {
+                    assert_eq!(
+                        other(&ScanParams(&record)),
+                        None,
+                        "{other_label} vs {label}"
+                    );
+                }
+            }
+        }
+        for (label, accessor) in I32_ACCESSORS {
+            let record = record_of(&[(label, GenericValue::Int32(17))]);
+            assert_eq!(accessor(&ScanParams(&record)), Some(17), "{label}");
+            let mistyped = record_of(&[(label, GenericValue::Float64(17.0))]);
+            assert_eq!(accessor(&ScanParams(&mistyped)), None, "{label} mistyped");
+            for (other_label, other) in I32_ACCESSORS {
+                if other_label != label {
+                    assert_eq!(
+                        other(&ScanParams(&record)),
+                        None,
+                        "{other_label} vs {label}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_accessor_is_none_for_an_empty_record() {
+        let record = record_of(&[]);
+        let params = ScanParams(&record);
+        for (label, accessor) in F64_ACCESSORS {
+            assert_eq!(accessor(&params), None, "{label}");
+        }
+        for (label, accessor) in I32_ACCESSORS {
+            assert_eq!(accessor(&params), None, "{label}");
+        }
+        assert_eq!(params.ion_injection_time_ms(), None);
+        assert_eq!(params.charge_state(), None);
+        assert_eq!(params.monoisotopic_mz(), None);
+        assert_eq!(params.isolation_width_mz(), None);
+        assert_eq!(params.ft_resolution(), None);
+        assert_eq!(params.orbitrap_resolution(), None);
+        assert_eq!(params.lm_correction_ppm(), None);
+        assert_eq!(params.lock_mass_correction_ppm(), None);
+        assert_eq!(params.number_of_lm_found(), None);
+        assert_eq!(params.number_of_lock_masses(), None);
+        assert_eq!(params.number_of_matched_lock_masses(), None);
+        assert_eq!(params.number_of_configured_lock_masses(), None);
+        assert_eq!(params.agc_enabled(), None);
+        assert_eq!(params.faims_cv(), None);
+        assert_eq!(params.faims_voltage_on(), None);
+        assert_eq!(params.reagent_ion_injection_time_ms(), None);
+        assert_eq!(params.reagent_ion_agc(), None);
+        assert_eq!(params.source_cid_energy_ev(), None);
+        assert_eq!(params.activation_energy(), None);
+        assert!(!params.activation_energy_is_nce());
+        assert_eq!(params.supplemental_activation_energy(), None);
+        assert_eq!(params.possible_charge_states(), None);
+        assert_eq!(params.sps_mass(0), None);
+        assert_eq!(params.scan_description(), None);
+        assert_eq!(params.multi_inject_info(), None);
+        assert_eq!(params.hcd_energy(), None);
+    }
+
+    #[test]
+    fn accessors_with_fallback_labels_read_either_spelling() {
+        for label in ["Ion Injection Time (ms):", "Ion Inject Time (ms):"] {
+            let record = record_of(&[(label, GenericValue::Float64(12.5))]);
+            assert_eq!(
+                ScanParams(&record).ion_injection_time_ms(),
+                Some(12.5),
+                "{label}"
+            );
+        }
+        for label in ["Orbitrap Resolution:", "FT Resolution:"] {
+            let record = record_of(&[(label, GenericValue::Int32(60_000))]);
+            let params = ScanParams(&record);
+            assert_eq!(params.orbitrap_resolution(), Some(60_000), "{label}");
+            assert_eq!(params.ft_resolution(), Some(60_000), "{label}");
+        }
+        for label in ["LM Correction (ppm):", "LM m/z-Correction (ppm):"] {
+            let record = record_of(&[(label, GenericValue::Float64(-0.25))]);
+            let params = ScanParams(&record);
+            assert_eq!(params.lock_mass_correction_ppm(), Some(-0.25), "{label}");
+            assert_eq!(params.lm_correction_ppm(), Some(-0.25), "{label}");
+        }
+        for label in [
+            "MS2 Isolation Width:",
+            "MSn Isolation Width:",
+            "Isolation Width (M/Z):",
+            "MS2 Isolation Width (M/Z):",
+        ] {
+            let record = record_of(&[(label, GenericValue::Float64(1.6))]);
+            assert_eq!(
+                ScanParams(&record).isolation_width_mz(),
+                Some(1.6),
+                "{label}"
+            );
+        }
+        for label in [
+            "Monoisotopic M/Z:",
+            "MS2 Isolation M/Z:",
+            "Isolation Center M/Z:",
+            "Precursor M/Z:",
+        ] {
+            let record = record_of(&[(label, GenericValue::Float64(500.25))]);
+            assert_eq!(
+                ScanParams(&record).monoisotopic_mz(),
+                Some(500.25),
+                "{label}"
+            );
+            // Zero means "not determined" on every spelling.
+            let zero = record_of(&[(label, GenericValue::Float64(0.0))]);
+            assert_eq!(ScanParams(&zero).monoisotopic_mz(), None, "{label} zero");
+        }
+    }
+
+    #[test]
+    fn charge_state_reads_both_the_int32_and_uint8_encodings() {
+        let int32 = record_of(&[("Charge State:", GenericValue::Int32(3))]);
+        assert_eq!(ScanParams(&int32).charge_state(), Some(3));
+        let uint8 = record_of(&[("Charge State:", GenericValue::UInt8(2))]);
+        assert_eq!(ScanParams(&uint8).charge_state(), Some(2));
+        // A charge state also answers possible_charge_states when the
+        // instrument wrote no list; the string list wins when it did.
+        assert_eq!(ScanParams(&int32).possible_charge_states(), Some(vec![3]));
+        let listed = record_of(&[
+            ("Charge State:", GenericValue::Int32(3)),
+            (
+                "Possible Charge States:",
+                GenericValue::String("2 3 4".into()),
+            ),
+        ]);
+        assert_eq!(
+            ScanParams(&listed).possible_charge_states(),
+            Some(vec![2, 3, 4])
+        );
+    }
+
+    #[test]
+    fn the_lock_mass_counts_keep_their_own_labels() {
+        let matched = record_of(&[("Number of LM Found:", GenericValue::Int32(2))]);
+        let params = ScanParams(&matched);
+        assert_eq!(params.number_of_matched_lock_masses(), Some(2));
+        assert_eq!(params.number_of_configured_lock_masses(), None);
+        assert_eq!(params.number_of_lock_masses(), Some(2));
+        let configured = record_of(&[("Number of Lock Masses:", GenericValue::Int32(3))]);
+        let params = ScanParams(&configured);
+        assert_eq!(params.number_of_matched_lock_masses(), None);
+        assert_eq!(params.number_of_configured_lock_masses(), Some(3));
+        // The compatibility accessor falls back to the configured count.
+        assert_eq!(params.number_of_lock_masses(), Some(3));
+        assert_eq!(params.number_of_lm_found(), Some(3));
+        // A negative count is not a count.
+        let negative = record_of(&[("Number of LM Found:", GenericValue::Int32(-1))]);
+        assert_eq!(ScanParams(&negative).number_of_matched_lock_masses(), None);
+    }
+
+    #[test]
+    fn the_flag_and_string_valued_accessors_read_their_own_field() {
+        let record = record_of(&[
+            ("AGC:", GenericValue::Bool(true)),
+            ("FAIMS Voltage On:", GenericValue::String("On".into())),
+            ("FAIMS CV:", GenericValue::Float32(-45.0)),
+            ("Reagent Ion AGC:", GenericValue::Bool(false)),
+            (
+                "Reagent Ion Injection Time (ms):",
+                GenericValue::Float32(7.5),
+            ),
+            ("Source CID eV:", GenericValue::Float64(12.0)),
+            ("SPS Mass 1:", GenericValue::Float32(400.5)),
+            ("SPS Mass 2:", GenericValue::Float32(500.5)),
+            ("Scan Description:", GenericValue::String("QC".into())),
+            ("Multi Inject Info:", GenericValue::String("IT=45 ".into())),
+        ]);
+        let params = ScanParams(&record);
+        assert_eq!(params.agc_enabled(), Some(true));
+        assert_eq!(params.faims_voltage_on(), Some(true));
+        assert_eq!(params.faims_cv(), Some(-45.0));
+        assert_eq!(params.reagent_ion_agc(), Some(false));
+        assert_eq!(params.reagent_ion_injection_time_ms(), Some(7.5));
+        assert_eq!(params.source_cid_energy_ev(), Some(12.0));
+        assert_eq!(params.sps_mass(0), Some(400.5));
+        assert_eq!(params.sps_mass(1), Some(500.5));
+        assert_eq!(params.sps_mass(2), None);
+        assert_eq!(params.scan_description(), Some("QC"));
+        assert_eq!(params.multi_inject_info(), Some("IT=45 "));
+        // "AGC:" as a string is read for on/off, and an unknown spelling of
+        // the FAIMS flag is not guessed at.
+        let strings = record_of(&[
+            ("AGC:", GenericValue::String("Off".into())),
+            ("FAIMS Voltage On:", GenericValue::String("maybe".into())),
+        ]);
+        let params = ScanParams(&strings);
+        assert_eq!(params.agc_enabled(), Some(false));
+        assert_eq!(params.faims_voltage_on(), None);
+    }
+
+    #[test]
+    fn activation_energy_prefers_nce_labels_over_ev_labels() {
+        let nce = record_of(&[
+            ("HCD Energy:", GenericValue::String("28.00".into())),
+            ("HCD Energy (eV):", GenericValue::Float64(45.0)),
+        ]);
+        let params = ScanParams(&nce);
+        assert_eq!(params.activation_energy(), Some(28.0));
+        assert!(params.activation_energy_is_nce());
+        assert_eq!(params.hcd_energy(), Some("28.00"));
+        let ev = record_of(&[("HCD Energy (eV):", GenericValue::Float64(45.0))]);
+        let params = ScanParams(&ev);
+        assert_eq!(params.activation_energy(), Some(45.0));
+        assert!(!params.activation_energy_is_nce());
+        // A percent sign is stripped, and 0.0 is the "not set" sentinel.
+        let percent = record_of(&[("CE:", GenericValue::String("30%".into()))]);
+        assert_eq!(ScanParams(&percent).activation_energy(), Some(30.0));
+        let zero = record_of(&[
+            ("HCD Energy:", GenericValue::String("0.00".into())),
+            ("Collision Energy (eV):", GenericValue::Float64(35.0)),
+        ]);
+        let params = ScanParams(&zero);
+        assert_eq!(params.activation_energy(), Some(35.0));
+        assert!(!params.activation_energy_is_nce());
+    }
+
+    #[test]
+    fn supplemental_activation_energy_reads_either_encoding() {
+        let number = record_of(&[("Supplemental Activation CE:", GenericValue::Float64(20.0))]);
+        assert_eq!(
+            ScanParams(&number).supplemental_activation_energy(),
+            Some(20.0)
+        );
+        let string = record_of(&[(
+            "Supplemental Activation:",
+            GenericValue::String("15%".into()),
+        )]);
+        assert_eq!(
+            ScanParams(&string).supplemental_activation_energy(),
+            Some(15.0)
+        );
+    }
+
     #[test]
     fn master_and_isolation_labels_are_not_misread() {
         let record = GenericRecord {
