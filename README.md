@@ -21,7 +21,7 @@ or in `Cargo.toml`:
 
 ```toml
 [dependencies]
-sage-plus-raw = "0.1"
+sage-plus-raw = "0.2"
 ```
 
 ## Usage
@@ -44,6 +44,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Reading
 
 Open with `RawFileReader::open_path`. Use `try_iter_spectra` for a stream of `Result<SpectrumRecord>` values, or `try_extract_spectrum` for one zero-based scan index. `try_extract_spectrum_arrays` returns full-precision `f64` arrays. `scan_metadata` reads metadata without peaks.
+
+A reader keeps only what decoding reads of a file's per-scan trailer: the ten values in `RawFileReader::scan_trailers`, 136 bytes a scan. To read any other trailer or instrument-log field through `scan_params` or `status_log_entry`, open the file with `RawFileReader::open_path_with(path, OpenOptions::with_records())`, which keeps the records themselves (on a 136k-scan Orbitrap file, 550 MiB and 10 million allocations more). Without them those accessors say so rather than report a missing field.
 
 ```sh
 cargo run --locked -p sage-plus-raw --example strict_read -- acquisition.raw

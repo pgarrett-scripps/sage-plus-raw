@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "sage-plus-raw"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "roxmltree",
  "thiserror",
