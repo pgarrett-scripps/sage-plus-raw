@@ -1017,6 +1017,48 @@ impl RawFileReader {
             })
     }
 
+    /// [`Self::read_peaks_only_with`] as the undecoded peak-list block, for
+    /// a caller that fills its own m/z and intensity arrays from it
+    /// (`scan_data::for_each_peak`) instead of taking a `Vec<Peak>` it would
+    /// only copy out of. Returns the block and whether its m/z fields are
+    /// f64.
+    ///
+    /// PacketHeader files only: a TSQ/SRM record has no peak-list block, so
+    /// those formats go through [`Self::read_peaks_only_with`].
+    pub(crate) fn read_peaks_only_block_with<'a, R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+        scratch: &'a mut Vec<u8>,
+    ) -> Result<(&'a [u8], bool)> {
+        self.read_peaks_only_block_inner(source, scan_number, scratch)
+            .map_err(|error| {
+                error.with_context(self.scan_context(scan_number, crate::Operation::ReadScan))
+            })
+    }
+
+    fn read_peaks_only_block_inner<'a, R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+        scratch: &'a mut Vec<u8>,
+    ) -> Result<(&'a [u8], bool)> {
+        use crate::scan_format::ScanDataFormat;
+        if self.scan_format != ScanDataFormat::PacketHeader {
+            return Err(Error::UnsupportedOperation(
+                "peak-list blocks require a PacketHeader file (Orbitrap/ion-trap); TSQ/SRM records carry no peak list",
+            ));
+        }
+        let entry = self.scan_index_entry(scan_number)?;
+        // Both are untrusted u64 values read from the file (a
+        // RawFileInfo address and a ScanIndexEntry offset); saturate
+        // instead of panicking on overflow for a corrupt combination.
+        let abs_offset = self.data_addr.saturating_add(entry.offset);
+        source.seek(SeekFrom::Start(abs_offset))?;
+        let mut r = BinaryReader::at(source, abs_offset, self.file_len);
+        ScanDataPacket::read_peaks_only_block(&mut r, scratch)
+    }
+
     fn read_peaks_only_inner<R: Read + Seek>(
         &self,
         source: &mut R,

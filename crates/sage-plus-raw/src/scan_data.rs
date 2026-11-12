@@ -127,6 +127,17 @@ impl ScanDataPacket {
         r: &mut BinaryReader<R>,
         scratch: &mut Vec<u8>,
     ) -> Result<Vec<Peak>> {
+        let (block, wide_mz) = Self::read_peaks_only_block(r, scratch)?;
+        Ok(peaks_from_block(block, wide_mz))
+    }
+
+    /// [`Self::read_peaks_only`] as the undecoded peak-list block, for a
+    /// caller that fills its own arrays from it ([`for_each_peak`]) instead
+    /// of taking a `Vec<Peak>` it would only copy out of.
+    pub(crate) fn read_peaks_only_block<'a, R: Read + Seek>(
+        r: &mut BinaryReader<R>,
+        scratch: &'a mut Vec<u8>,
+    ) -> Result<(&'a [u8], bool)> {
         let header = PacketHeader::read(r)?;
 
         // Skip profile data instead of decoding it.
@@ -134,7 +145,7 @@ impl ScanDataPacket {
             r.skip((header.profile_size as usize) * 4)?;
         }
 
-        Self::read_peaks(r, &header, scratch)
+        Self::read_peak_block(r, &header, scratch)
     }
 
     /// Decode the centroid peak list. Assumes the cursor sits at the start of
@@ -144,37 +155,28 @@ impl ScanDataPacket {
         header: &PacketHeader,
         scratch: &mut Vec<u8>,
     ) -> Result<Vec<Peak>> {
+        let (block, wide_mz) = Self::read_peak_block(r, header, scratch)?;
+        Ok(peaks_from_block(block, wide_mz))
+    }
+
+    /// Read the scan's peak list as bytes, saying whether its m/z fields are
+    /// f64 (`true`) or f32. Assumes the cursor sits at the start of the peak
+    /// list (i.e. profile data has already been read or skipped).
+    fn read_peak_block<'a, R: Read + Seek>(
+        r: &mut BinaryReader<R>,
+        header: &PacketHeader,
+        scratch: &'a mut Vec<u8>,
+    ) -> Result<(&'a [u8], bool)> {
         // Layout bit 16 (0x10000) means m/z is f64 instead of f32.
         let wide_mz = header.layout & 0x10000 != 0;
         if header.peak_list_size == 0 {
-            return Ok(Vec::new());
+            return Ok((&[], wide_mz));
         }
         let count = r.read_u32()? as usize;
-        let item_size = if wide_mz { 12 } else { 8 };
         // The whole peak list in one read, then parsed from the bytes: a
         // field at a time is two reads per peak, around 2,400 per scan.
-        let block = r.read_items_into(scratch, count, item_size)?;
-        let mut peaks = Vec::with_capacity(count);
-        // Each item is read at fixed offsets in a chunk of known length, so
-        // the bounds checks fold away and the loop is one load per field.
-        if wide_mz {
-            for item in block.chunks_exact(12) {
-                peaks.push(Peak {
-                    mz: f64::from_le_bytes([
-                        item[0], item[1], item[2], item[3], item[4], item[5], item[6], item[7],
-                    ]),
-                    abundance: f32::from_le_bytes([item[8], item[9], item[10], item[11]]),
-                });
-            }
-        } else {
-            for item in block.chunks_exact(8) {
-                peaks.push(Peak {
-                    mz: f64::from(f32::from_le_bytes([item[0], item[1], item[2], item[3]])),
-                    abundance: f32::from_le_bytes([item[4], item[5], item[6], item[7]]),
-                });
-            }
-        }
-        Ok(peaks)
+        let block = r.read_items_into(scratch, count, peak_item_size(wide_mz))?;
+        Ok((block, wide_mz))
     }
 
     /// Decode the per-peak label streams that follow the centroid peak list:
@@ -270,6 +272,53 @@ impl ScanDataPacket {
         let last = nodes[nodes.len() - 1];
         Some((last.noise, last.baseline))
     }
+}
+
+/// Size on disk of one peak-list item: an f32 intensity and an m/z that is
+/// f64 in the wide layout and f32 otherwise.
+pub(crate) fn peak_item_size(wide_mz: bool) -> usize {
+    if wide_mz {
+        12
+    } else {
+        8
+    }
+}
+
+/// Parse every peak of a peak-list block, handing `(mz, intensity)` to
+/// `visit` in file order.
+///
+/// This is the one place peak-list bytes become numbers, so a caller filling
+/// its own m/z and intensity arrays gets exactly the values
+/// [`ScanDataPacket::read_peaks_only`] puts in its `Vec<Peak>`.
+pub(crate) fn for_each_peak(block: &[u8], wide_mz: bool, mut visit: impl FnMut(f64, f32)) {
+    // Each item is read at fixed offsets in a chunk of known length, so
+    // the bounds checks fold away and the loop is one load per field.
+    if wide_mz {
+        for item in block.chunks_exact(12) {
+            visit(
+                f64::from_le_bytes([
+                    item[0], item[1], item[2], item[3], item[4], item[5], item[6], item[7],
+                ]),
+                f32::from_le_bytes([item[8], item[9], item[10], item[11]]),
+            );
+        }
+    } else {
+        for item in block.chunks_exact(8) {
+            visit(
+                f64::from(f32::from_le_bytes([item[0], item[1], item[2], item[3]])),
+                f32::from_le_bytes([item[4], item[5], item[6], item[7]]),
+            );
+        }
+    }
+}
+
+/// Collect a peak-list block into a `Vec<Peak>`.
+fn peaks_from_block(block: &[u8], wide_mz: bool) -> Vec<Peak> {
+    let mut peaks = Vec::with_capacity(block.len() / peak_item_size(wide_mz));
+    for_each_peak(block, wide_mz, |mz, abundance| {
+        peaks.push(Peak { mz, abundance })
+    });
+    peaks
 }
 
 impl PacketHeader {

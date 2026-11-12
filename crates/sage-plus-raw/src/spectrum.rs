@@ -656,6 +656,29 @@ fn fill_scan_arrays<R: Read + Seek, I: PeakIntensity>(
         );
         return Ok((Some(crate::ScanMode::Centroid), dropped));
     }
+    if raw.scan_format == crate::scan_format::ScanDataFormat::PacketHeader {
+        // Validate and fill the arrays straight from the peak-list block,
+        // instead of collecting a `Vec<Peak>` for the scan and copying it
+        // out: nothing outside this call needs that Vec. The values are
+        // `for_each_peak`'s, the same ones `read_peaks_only` would have put
+        // in it, and the validity test is the one `extend_valid_peaks`
+        // applies.
+        let (block, wide_mz) = raw.read_peaks_only_block_with(source, scan_number, scratch)?;
+        let count = block.len() / crate::scan_data::peak_item_size(wide_mz);
+        mz.reserve(count);
+        intensity.reserve(count);
+        let mut dropped = 0;
+        crate::scan_data::for_each_peak(block, wide_mz, |peak_mz, abundance| {
+            let peak_intensity = f64::from(abundance);
+            if valid_peak(peak_mz, peak_intensity) {
+                mz.push(peak_mz);
+                intensity.push(I::from_decoded(peak_intensity));
+            } else {
+                dropped += 1;
+            }
+        });
+        return Ok((Some(crate::ScanMode::Centroid), dropped));
+    }
     let peaks = raw.read_peaks_only_with(source, scan_number, scratch)?;
     let dropped = extend_valid_peaks(
         peaks.iter().map(|p| (p.mz, f64::from(p.abundance))),
