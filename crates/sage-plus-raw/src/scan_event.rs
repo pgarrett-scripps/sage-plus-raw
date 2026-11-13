@@ -99,7 +99,9 @@ impl ScanEventPreamble {
         None
     }
 
-    /// Wideband (broadband isolation) flag: byte 32.
+    /// Wideband flag: byte 32, `true` only for 1. The Finnigan Perl module
+    /// (Gene Selkov, `Finnigan::ScanEventPreamble`) names this byte
+    /// "wideband" with 0 = off, 1 = on, 2 = undefined.
     pub fn is_wideband(&self) -> bool {
         self.bytes.get(32).copied() == Some(1)
     }

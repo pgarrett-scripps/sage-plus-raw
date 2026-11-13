@@ -9,6 +9,11 @@
 ///
 /// ## Grammar
 ///
+/// Token order follows the "filter line" that the Finnigan Perl module
+/// (Gene Selkov, <https://metacpan.org/dist/Finnigan>) renders from
+/// `Finnigan::ScanEventPreamble`, `Finnigan::Reaction` and
+/// `Finnigan::FractionCollector`.
+///
 /// ```text
 /// <analyzer> <polarity> <scan_mode> <ionization> [<dependent>] <scan_type>
 ///   ms<n>  [<precursor>@<method><energy> ...]  [<range>]

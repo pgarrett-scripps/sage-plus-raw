@@ -35,15 +35,10 @@ impl<'a> ScanParams<'a> {
         self.0
     }
 
-    /// Ion injection / fill time in milliseconds.
-    ///
-    /// Label varies: `"Ion Injection Time (ms):"` (Orbitrap family) vs
-    /// `"Ion Inject Time (ms):"` (older LTQ variants).
+    /// Ion injection / fill time in milliseconds
+    /// (`"Ion Injection Time (ms):"`).
     pub fn ion_injection_time_ms(&self) -> Option<f64> {
-        // Try canonical label first; fall back to legacy label.
-        self.0
-            .get_f64("Ion Injection Time (ms):")
-            .or_else(|| self.0.get_f64("Ion Inject Time (ms):"))
+        self.0.get_f64("Ion Injection Time (ms):")
     }
 
     /// Precursor charge state (0 = unknown / MS1 scan).
@@ -68,12 +63,7 @@ impl<'a> ScanParams<'a> {
     ///
     /// Returns `None` when the value is absent or zero (not determined).
     pub fn monoisotopic_mz(&self) -> Option<f64> {
-        let v = self
-            .0
-            .get_f64("Monoisotopic M/Z:")
-            .or_else(|| self.0.get_f64("MS2 Isolation M/Z:"))
-            .or_else(|| self.0.get_f64("Isolation Center M/Z:"))
-            .or_else(|| self.0.get_f64("Precursor M/Z:"))?;
+        let v = self.0.get_f64("Monoisotopic M/Z:")?;
         if v > 0.0 {
             Some(v)
         } else {
@@ -138,14 +128,9 @@ impl<'a> ScanParams<'a> {
 
     /// MSn isolation window width in m/z.
     ///
-    /// Label varies: `"MS2 Isolation Width:"` (most common), `"MSn Isolation Width:"`,
-    /// or `"Isolation Width (M/Z):"` on some firmware.
+    /// Read from `"MS2 Isolation Width:"`.
     pub fn isolation_width_mz(&self) -> Option<f64> {
-        self.0
-            .get_f64("MS2 Isolation Width:")
-            .or_else(|| self.0.get_f64("MSn Isolation Width:"))
-            .or_else(|| self.0.get_f64("Isolation Width (M/Z):"))
-            .or_else(|| self.0.get_f64("MS2 Isolation Width (M/Z):"))
+        self.0.get_f64("MS2 Isolation Width:")
     }
 
     /// MSn isolation window target m/z (the center of the isolation window),
@@ -166,75 +151,50 @@ impl<'a> ScanParams<'a> {
 
     /// Activation energy (eV or %) for the primary activation step.
     ///
-    /// Tries several label variants present across instrument families.
     /// NCE (normalized collision energy) labels are checked first, so a scan
-    /// that carries both reports its NCE value. eV labels are used only when
+    /// that carries both reports its NCE value. The eV label is used only when
     /// no NCE label is present. [`Self::activation_energy_is_nce`] says which
-    /// kind was found.
+    /// kind was found. Zero is skipped as "not set".
     ///
     /// Label priority:
-    /// 1. `"HCD Energy:"` / `"HCD Energy V:"` / `"CE:"` - NCE string form
-    /// 2. `"Normalized Collision Energy:"` - ion-trap CID NCE
-    /// 3. `"HCD Energy (eV):"` - explicit eV label (Q Exactive HF-X, Exploris)
-    /// 4. `"HCD Energy eV:"` - eV variant
-    /// 5. `"Collision Energy (eV):"` - ITMS CID eV
+    /// 1. `"HCD Energy:"` / `"HCD Energy V:"` - NCE, string form
+    /// 2. `"HCD Energy eV:"` - eV
     pub fn activation_energy(&self) -> Option<f64> {
-        // NCE labels: preferred because they match the user-set method value.
-        // Skip 0.0 (sentinel for "not set").
-        for label in &["HCD Energy:", "HCD Energy V:", "CE:"] {
-            if let Some(s) = self.0.get_string(label) {
-                if let Ok(v) = s.trim().trim_end_matches('%').parse::<f64>() {
-                    if v > 0.0 {
-                        return Some(v);
-                    }
-                }
-            }
-        }
-        if let Some(v) = self
-            .0
-            .get_f64("Normalized Collision Energy:")
-            .filter(|&v| v > 0.0)
-        {
+        if let Some(v) = self.nce() {
             return Some(v);
         }
-        // eV labels: used when no NCE label is available.
-        if let Some(v) = self.0.get_f64("HCD Energy (eV):").filter(|&v| v > 0.0) {
-            return Some(v);
-        }
-        if let Some(v) = self.0.get_f64("HCD Energy eV:").filter(|&v| v > 0.0) {
-            return Some(v);
-        }
-        self.0
-            .get_f64("Collision Energy (eV):")
-            .filter(|&v| v > 0.0)
+        self.0.get_f64("HCD Energy eV:").filter(|&v| v > 0.0)
     }
 
     /// Whether the value returned by [`Self::activation_energy`] is a normalized
     /// collision energy (NCE, dimensionless %) rather than an absolute eV value.
     ///
     /// Returns `true` when `activation_energy` found a value from an NCE label
-    /// (`HCD Energy:`, `HCD Energy V:`, `CE:`, or `Normalized Collision Energy:`).
-    /// Returns `false` when only eV labels were present or no energy was found.
+    /// (`HCD Energy:` or `HCD Energy V:`). Returns `false` when only the eV
+    /// label was present or no energy was found.
     pub fn activation_energy_is_nce(&self) -> bool {
-        // Returns true if activation_energy() took the NCE path.
-        for label in &["HCD Energy:", "HCD Energy V:", "CE:"] {
-            if let Some(s) = self.0.get_string(label) {
-                if let Ok(v) = s.trim().trim_end_matches('%').parse::<f64>() {
-                    if v > 0.0 {
-                        return true;
-                    }
-                }
-            }
-        }
-        self.0
-            .get_f64("Normalized Collision Energy:")
-            .filter(|&v| v > 0.0)
-            .is_some()
+        self.nce().is_some()
     }
 
-    /// Supplemental activation energy for EThcD scans (the HCD component).
+    /// First positive NCE value from the string-typed NCE labels. Zero is the
+    /// "not set" sentinel and is skipped.
+    fn nce(&self) -> Option<f64> {
+        ["HCD Energy:", "HCD Energy V:"].iter().find_map(|label| {
+            self.0
+                .get_string(label)
+                .and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+                .filter(|&v| v > 0.0)
+        })
+    }
+
+    /// Supplemental activation energy for EThcD scans (the HCD component),
+    /// from `"Supplemental Activation CE:"` or `"Supplemental Activation:"`.
     ///
-    /// Returns `None` for non-EThcD scans.
+    /// Returns `None` for non-EThcD scans. Neither label occurs in the public
+    /// fixtures, and upstream OpenTFRaw b2418f2 removed this accessor for
+    /// that reason; it is kept here because the two-clause EThcD filter this
+    /// fork renders needs the HCD component of such a scan, and reads the
+    /// primary energy only when it is absent.
     pub fn supplemental_activation_energy(&self) -> Option<f64> {
         if let Some(v) = self.0.get_f64("Supplemental Activation CE:") {
             return Some(v);
@@ -245,29 +205,15 @@ impl<'a> ScanParams<'a> {
         None
     }
 
-    /// All possible charge states reported by the precursor selection algorithm.
+    /// Selected precursor charge as a one-element list, or `None` when
+    /// [`Self::charge_state`] is absent or not positive.
     ///
-    /// Returns `None` when the instrument did not report possible charges.
-    /// Some firmware stores them as a space-delimited string (e.g. `"2 3"`);
-    /// others use a typed integer for the single selected charge.
+    /// `"Possible Charge States:"`, a space-delimited list this read before,
+    /// occurs in no corpus file (upstream OpenTFRaw b2418f2).
     pub fn possible_charge_states(&self) -> Option<Vec<u32>> {
-        // String variant: "2 3 4"
-        if let Some(s) = self.0.get_string("Possible Charge States:") {
-            let v: Vec<u32> = s
-                .split_whitespace()
-                .filter_map(|t| t.parse::<u32>().ok())
-                .collect();
-            if !v.is_empty() {
-                return Some(v);
-            }
-        }
-        // Integer variant (single charge)
-        if let Some(c) = self.charge_state() {
-            if c > 0 {
-                return Some(vec![c as u32]);
-            }
-        }
-        None
+        self.charge_state()
+            .filter(|&c| c > 0)
+            .map(|c| vec![c as u32])
     }
 
     /// Raw FAIMS compensation voltage in V, including inactive trailer values.
@@ -307,7 +253,7 @@ impl<'a> ScanParams<'a> {
         self.0.get_f64("S-Lens RF Level:")
     }
 
-    /// AGC fill percentage (0.0-1.0), reported on Q Exactive HF family.
+    /// AGC fill value (`"AGC Fill:"`).
     pub fn agc_fill(&self) -> Option<f64> {
         self.0.get_f64("AGC Fill:")
     }
@@ -317,7 +263,7 @@ impl<'a> ScanParams<'a> {
         self.0.get_f64("Analyzer Temperature:")
     }
 
-    /// PS injection time in milliseconds (pre-scan injection for Q Exactive).
+    /// `"PS Inj. Time (ms):"` value in milliseconds.
     pub fn ps_injection_time_ms(&self) -> Option<f64> {
         self.0.get_f64("PS Inj. Time (ms):")
     }
@@ -344,7 +290,7 @@ impl<'a> ScanParams<'a> {
             .or_else(|| self.0.get_f32("API Source CID Energy:").map(f64::from))
     }
 
-    /// Dynamic retention time shift in minutes (Q Exactive HF-X AutoQC).
+    /// Dynamic retention time shift in minutes (`"Dynamic RT Shift (min):"`).
     pub fn dynamic_rt_shift_min(&self) -> Option<f64> {
         self.0.get_f64("Dynamic RT Shift (min):")
     }
@@ -417,12 +363,12 @@ impl<'a> ScanParams<'a> {
         self.0.get_f64("Conversion Parameter C:")
     }
 
-    /// Raw over-fill time T (used for AGC computation).
+    /// `"RawOvFtT:"` value, as stored. Its meaning is not decoded.
     pub fn raw_ovft(&self) -> Option<f64> {
         self.0.get_f64("RawOvFtT:")
     }
 
-    /// Error in the isotopic envelope fit (used for charge-state scoring).
+    /// `"Error in isotopic envelope fit:"` value, as stored.
     pub fn isotopic_fit_error(&self) -> Option<f64> {
         self.0.get_f64("Error in isotopic envelope fit:")
     }
@@ -540,9 +486,7 @@ impl<'a> StatusLogEntry<'a> {
 
     /// Ion injection time in milliseconds (present on Orbitrap family).
     pub fn ion_injection_time_ms(&self) -> Option<f64> {
-        self.0
-            .get_f64("Ion Injection Time (ms):")
-            .or_else(|| self.0.get_f64("Ion Inject Time (ms):"))
+        self.0.get_f64("Ion Injection Time (ms):")
     }
 
     /// Orbitrap / FT resolving power setting.
@@ -571,27 +515,11 @@ impl<'a> StatusLogEntry<'a> {
             .or_else(|| self.0.get_f32("Analyzer Temperature:").map(f64::from))
     }
 
-    /// API (spray) source voltage (V).
-    pub fn spray_voltage(&self) -> Option<f64> {
-        self.0
-            .get_f64("Spray Voltage (V):")
-            .or_else(|| self.0.get_f64("Spray Voltage:"))
-            .or_else(|| self.0.get_f32("Spray Voltage:").map(f64::from))
-    }
-
     /// Lock mass reference correction (ppm).
     pub fn lock_mass_correction_ppm(&self) -> Option<f64> {
         self.0
             .get_f64("LM Correction (ppm):")
             .or_else(|| self.0.get_f64("LM m/z-Correction (ppm):"))
-    }
-
-    /// Capillary temperature (°C).
-    pub fn capillary_temperature(&self) -> Option<f64> {
-        self.0
-            .get_f64("Capillary Temp (°C):")
-            .or_else(|| self.0.get_f64("Capillary Temp:"))
-            .or_else(|| self.0.get_f32("Capillary Temp:").map(f64::from))
     }
 
     /// Compatibility count: matched lock masses, falling back to the configured
@@ -767,14 +695,6 @@ mod tests {
 
     #[test]
     fn accessors_with_fallback_labels_read_either_spelling() {
-        for label in ["Ion Injection Time (ms):", "Ion Inject Time (ms):"] {
-            let record = record_of(&[(label, GenericValue::Float64(12.5))]);
-            assert_eq!(
-                ScanParams(&record).ion_injection_time_ms(),
-                Some(12.5),
-                "{label}"
-            );
-        }
         for label in ["Orbitrap Resolution:", "FT Resolution:"] {
             let record = record_of(&[(label, GenericValue::Int32(60_000))]);
             let params = ScanParams(&record);
@@ -787,35 +707,60 @@ mod tests {
             assert_eq!(params.lock_mass_correction_ppm(), Some(-0.25), "{label}");
             assert_eq!(params.lm_correction_ppm(), Some(-0.25), "{label}");
         }
-        for label in [
-            "MS2 Isolation Width:",
-            "MSn Isolation Width:",
-            "Isolation Width (M/Z):",
-            "MS2 Isolation Width (M/Z):",
-        ] {
-            let record = record_of(&[(label, GenericValue::Float64(1.6))]);
-            assert_eq!(
-                ScanParams(&record).isolation_width_mz(),
-                Some(1.6),
-                "{label}"
-            );
+    }
+
+    /// Each accessor reads the one label the corpus attests, and the variants
+    /// that occur in no corpus file are not read at all (upstream OpenTFRaw
+    /// b2418f2): a file that does carry one is still read by name through the
+    /// trailer record itself.
+    #[test]
+    fn only_the_corpus_attested_label_of_each_value_is_read() {
+        type Read = fn(&ScanParams<'_>) -> Option<f64>;
+        let attested: &[(&str, Read)] = &[
+            ("Ion Injection Time (ms):", |p| p.ion_injection_time_ms()),
+            ("MS2 Isolation Width:", |p| p.isolation_width_mz()),
+            ("Monoisotopic M/Z:", |p| p.monoisotopic_mz()),
+        ];
+        for (label, read) in attested {
+            let record = record_of(&[(label, GenericValue::Float64(12.5))]);
+            assert_eq!(read(&ScanParams(&record)), Some(12.5), "{label}");
         }
-        for label in [
-            "Monoisotopic M/Z:",
-            "MS2 Isolation M/Z:",
-            "Isolation Center M/Z:",
-            "Precursor M/Z:",
-        ] {
-            let record = record_of(&[(label, GenericValue::Float64(500.25))]);
-            assert_eq!(
-                ScanParams(&record).monoisotopic_mz(),
-                Some(500.25),
-                "{label}"
-            );
-            // Zero means "not determined" on every spelling.
-            let zero = record_of(&[(label, GenericValue::Float64(0.0))]);
-            assert_eq!(ScanParams(&zero).monoisotopic_mz(), None, "{label} zero");
+        // Zero still means "not determined" for the precursor m/z.
+        let zero = record_of(&[("Monoisotopic M/Z:", GenericValue::Float64(0.0))]);
+        assert_eq!(ScanParams(&zero).monoisotopic_mz(), None);
+
+        let dropped: &[(&str, Read)] = &[
+            ("Ion Inject Time (ms):", |p| p.ion_injection_time_ms()),
+            ("MSn Isolation Width:", |p| p.isolation_width_mz()),
+            ("Isolation Width (M/Z):", |p| p.isolation_width_mz()),
+            ("MS2 Isolation Width (M/Z):", |p| p.isolation_width_mz()),
+            ("MS2 Isolation M/Z:", |p| p.monoisotopic_mz()),
+            ("Isolation Center M/Z:", |p| p.monoisotopic_mz()),
+            ("Precursor M/Z:", |p| p.monoisotopic_mz()),
+            ("Normalized Collision Energy:", |p| p.activation_energy()),
+            ("HCD Energy (eV):", |p| p.activation_energy()),
+            ("Collision Energy (eV):", |p| p.activation_energy()),
+        ];
+        for (label, read) in dropped {
+            let record = record_of(&[(label, GenericValue::Float64(12.5))]);
+            assert_eq!(read(&ScanParams(&record)), None, "{label}");
         }
+        // "CE:" was an NCE spelling of its own; it is not read either.
+        let ce = record_of(&[("CE:", GenericValue::String("30".into()))]);
+        let params = ScanParams(&ce);
+        assert_eq!(params.activation_energy(), None);
+        assert!(!params.activation_energy_is_nce());
+        // Nor is the undecoded charge-state list.
+        let listed = record_of(&[(
+            "Possible Charge States:",
+            GenericValue::String("2 3 4".into()),
+        )]);
+        assert_eq!(ScanParams(&listed).possible_charge_states(), None);
+        // The status log reads the one spelling too.
+        let log = record_of(&[("Ion Inject Time (ms):", GenericValue::Float64(5.0))]);
+        assert_eq!(StatusLogEntry(&log).ion_injection_time_ms(), None);
+        let log = record_of(&[("Ion Injection Time (ms):", GenericValue::Float64(5.0))]);
+        assert_eq!(StatusLogEntry(&log).ion_injection_time_ms(), Some(5.0));
     }
 
     #[test]
@@ -824,20 +769,11 @@ mod tests {
         assert_eq!(ScanParams(&int32).charge_state(), Some(3));
         let uint8 = record_of(&[("Charge State:", GenericValue::UInt8(2))]);
         assert_eq!(ScanParams(&uint8).charge_state(), Some(2));
-        // A charge state also answers possible_charge_states when the
-        // instrument wrote no list; the string list wins when it did.
+        // The selected charge is the only charge list there is.
         assert_eq!(ScanParams(&int32).possible_charge_states(), Some(vec![3]));
-        let listed = record_of(&[
-            ("Charge State:", GenericValue::Int32(3)),
-            (
-                "Possible Charge States:",
-                GenericValue::String("2 3 4".into()),
-            ),
-        ]);
-        assert_eq!(
-            ScanParams(&listed).possible_charge_states(),
-            Some(vec![2, 3, 4])
-        );
+        assert_eq!(ScanParams(&uint8).possible_charge_states(), Some(vec![2]));
+        let zero = record_of(&[("Charge State:", GenericValue::Int32(0))]);
+        assert_eq!(ScanParams(&zero).possible_charge_states(), None);
     }
 
     #[test]
@@ -903,22 +839,27 @@ mod tests {
     fn activation_energy_prefers_nce_labels_over_ev_labels() {
         let nce = record_of(&[
             ("HCD Energy:", GenericValue::String("28.00".into())),
-            ("HCD Energy (eV):", GenericValue::Float64(45.0)),
+            ("HCD Energy eV:", GenericValue::Float64(45.0)),
         ]);
         let params = ScanParams(&nce);
         assert_eq!(params.activation_energy(), Some(28.0));
         assert!(params.activation_energy_is_nce());
         assert_eq!(params.hcd_energy(), Some("28.00"));
-        let ev = record_of(&[("HCD Energy (eV):", GenericValue::Float64(45.0))]);
+        let ev = record_of(&[("HCD Energy eV:", GenericValue::Float64(45.0))]);
         let params = ScanParams(&ev);
         assert_eq!(params.activation_energy(), Some(45.0));
         assert!(!params.activation_energy_is_nce());
-        // A percent sign is stripped, and 0.0 is the "not set" sentinel.
-        let percent = record_of(&[("CE:", GenericValue::String("30%".into()))]);
-        assert_eq!(ScanParams(&percent).activation_energy(), Some(30.0));
+        // A percent sign is stripped from either NCE spelling.
+        for label in ["HCD Energy:", "HCD Energy V:"] {
+            let percent = record_of(&[(label, GenericValue::String("30%".into()))]);
+            let params = ScanParams(&percent);
+            assert_eq!(params.activation_energy(), Some(30.0), "{label}");
+            assert!(params.activation_energy_is_nce(), "{label}");
+        }
+        // 0.0 is the "not set" sentinel, so the eV label answers instead.
         let zero = record_of(&[
             ("HCD Energy:", GenericValue::String("0.00".into())),
-            ("Collision Energy (eV):", GenericValue::Float64(35.0)),
+            ("HCD Energy eV:", GenericValue::Float64(35.0)),
         ]);
         let params = ScanParams(&zero);
         assert_eq!(params.activation_energy(), Some(35.0));

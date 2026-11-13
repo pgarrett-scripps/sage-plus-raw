@@ -146,23 +146,22 @@ pub struct RawFileReader {
 
 // -- Multi-controller metadata --
 
-/// Controller type codes as used in Thermo RAW files.
+/// Inferred controller kind. The reader decodes no controller-type code, so
+/// it only separates the MS controller from every other controller
+/// (upstream OpenTFRaw b2418f2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControllerType {
+    /// A controller whose run header has MS scan data.
     Ms,
-    Analog,
-    Adc,
-    Pda,
-    Uv,
+    /// Any other controller (for example a UV or analog detector channel).
     Other,
 }
 
 impl ControllerType {
     fn from_nsegs_ntrailer(ntrailer: u32, nsegs: u32) -> Self {
         // Heuristic: MS controller always has ntrailer > 0 (v64+) or nsegs > 0.
-        // Non-MS controllers (UV, analog, PDA) have ntrailer == 0 and nsegs == 1.
-        // We can't reliably distinguish between non-MS types without parsing
-        // the InstID/method block, so we fall back to Other for those.
+        // Non-MS controllers have ntrailer == 0 and nsegs == 1. No byte that
+        // names the kind of a non-MS controller is decoded, so those are Other.
         if ntrailer > 0 || nsegs > 1 {
             Self::Ms
         } else {
@@ -1372,16 +1371,18 @@ impl RawFileReader {
         if self.flat_peaks {
             let q1 = self.srm_q1_by_event.get(&entry.scan_event).copied()?;
             let windows = self.srm_q3_windows.get(&entry.scan_event)?;
-            // v63 (TSQ Quantum/Vantage): NSI ionization, @cid{CE:.2} after Q1.
-            // v66 (TSQ Quantiva/Altis): ESI ionization, no CE in filter.
-            use crate::scan_format::ScanDataFormat;
-            let ionization = match self.scan_format {
-                ScanDataFormat::FlatV63 => "NSI",
-                _ => "ESI",
-            };
+            // No ionization token: these files have no scan event, so the
+            // ionization byte is not available, which is what the renderer
+            // does for an unknown ionization anywhere else. The fixed NSI
+            // (v63) and ESI (v66) tokens this wrote are not in the file, and
+            // the embedded methods of PXD056439 (NSI) and PXD041995 (H-ESI)
+            // contradict them (upstream OpenTFRaw b2418f2). The transition's
+            // collision energy stays out of the filter string; it reaches a
+            // caller through the decoded precursor instead
+            // (`RawFileReader::srm_ce_by_event`).
             // Writing into a String cannot fail; the Result is discarded
             // rather than unwrapped.
-            let _ = write!(out, "c {ionization} SRM ms2 {q1:.3}");
+            let _ = write!(out, "c SRM ms2 {q1:.3}");
             if !windows.is_empty() {
                 out.push(' ');
                 out.push('[');
