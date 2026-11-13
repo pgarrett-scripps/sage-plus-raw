@@ -59,7 +59,7 @@ pub mod seq_row;
 
 pub use device::{DetectedInstrument, DeviceFamily};
 pub use error::{Error, ErrorContext, ErrorKind, Operation, Result};
-pub use metadata::{ScanParams, ScanTrailer, StatusLogEntry};
+pub use metadata::{ScanParams, ScanTrailer, StatusLogEntry, StatusLogRecord};
 pub use reader::{ControllerInfo, ControllerType, OpenOptions, RawFileReader};
 pub use scan_format::ScanDataFormat;
 pub use spectrum::{

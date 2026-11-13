@@ -57,6 +57,9 @@ pub enum Error {
     )]
     RecordsNotKept(&'static str),
 
+    #[error("the instrument status log was not decoded: {0}")]
+    StatusLogNotDecoded(String),
+
     #[error(
         "refusing to allocate for {requested} bytes at offset {offset:#x}: \
          only {available} bytes remain in the input"
@@ -168,6 +171,7 @@ impl Error {
             Self::Io(_) => ErrorKind::Io,
             Self::InvalidScanIndex(_) | Self::InvalidScanNumber(_) => ErrorKind::InvalidInput,
             Self::RecordsNotKept(_) => ErrorKind::InvalidInput,
+            Self::StatusLogNotDecoded(_) => ErrorKind::Unsupported,
             Self::UnsupportedVersion(_)
             | Self::UnsupportedOperation(_)
             | Self::UnsupportedLayout(_) => ErrorKind::Unsupported,

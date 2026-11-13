@@ -56,6 +56,7 @@ cargo run --locked -p sage-plus-raw --example strict_read -- acquisition.raw
 - `master_scan_number` comes from the "Master Scan Number" trailer, or else the nearest earlier scan one MS level lower. "Master Index" is a 0/1 flag and is never used.
 - The isolation target comes from "Target M/Z" or the first reaction. "MS2 Isolation Offset" is an offset, exposed by `ScanParams::isolation_offset_mz`.
 - A peak with a non-finite or non-positive m/z, or an intensity that is not finite or overflows `f32`, is dropped and counted in `dropped_peaks`. It does not fail the scan.
+- The instrument status log is a time series: `RawFileReader::status_log_record` gives the last record written at or before a scan's start time, and `status_log_error` says why a log did not decode. Its records need `OpenOptions::with_records`.
 - Unreadable scans return errors with operation, scan and byte-offset context (`Error::kind`, `Error::context`, `Error::root_cause`).
 - Activation is reported only when qualified (v66 reaction tags 11 = HCD, 9 = ETD). Nondependent MS2 is not evidence of DIA; `is_dia` is a legacy heuristic.
 

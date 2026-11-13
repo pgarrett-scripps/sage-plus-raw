@@ -474,6 +474,85 @@ fn one_handle_decodes_what_two_handles_do() {
     }
 }
 
+/// The instrument status log of every public fixture decodes, and each scan
+/// sees the last record written at or before its own start time.
+///
+/// The header used to be looked for at the record address, where there is no
+/// header, so the log never decoded at all (upstream OpenTFRaw e5f4aff).
+#[test]
+#[ignore = "requires downloaded public fixtures, run by CI"]
+fn the_instrument_status_log_decodes_on_every_public_fixture() {
+    for name in [
+        "BSA-FT-ETD.raw",
+        "BSA-FT-HCD.raw",
+        "FT-HCD-MSX.raw",
+        "IsolationMzOffset-ReportedMassOffset.raw",
+        "IT-HCD-SPS.raw",
+        "source_cid_test_3scans.raw",
+    ] {
+        let raw = RawFileReader::open_path_with(
+            fixture(name),
+            sage_plus_raw::OpenOptions::with_records(),
+        )
+        .unwrap();
+        assert_eq!(raw.status_log_error(), None, "{name}");
+        // Every record the run header declares, with the schema the log's own
+        // header gives, and no empty schema passing as a decoded log.
+        assert_eq!(
+            raw.inst_log.len(),
+            raw.run_header.sample_info.inst_log_length as usize,
+            "{name}"
+        );
+        assert!(!raw.inst_log.is_empty(), "{name}");
+        assert!(!raw.inst_log_header.fields.is_empty(), "{name}");
+        for record in &raw.inst_log {
+            assert!(record.time.is_finite(), "{name}");
+            assert_eq!(
+                record.record.values.len(),
+                raw.inst_log_header.fields.len(),
+                "{name} at {}",
+                record.time
+            );
+        }
+
+        // The time axis is a non-decreasing run of the log.
+        let axis = &raw.inst_log[raw.inst_log_time_axis.clone()];
+        assert!(!axis.is_empty(), "{name}");
+        assert!(
+            axis.windows(2).all(|w| w[0].time <= w[1].time),
+            "{name}: time axis is not monotonic"
+        );
+
+        let first = raw.run_header.sample_info.first_scan_number;
+        let last = raw.run_header.sample_info.last_scan_number;
+        let mut with_status = 0;
+        for scan in first..=last {
+            let rt = raw.scan_index[(scan - first) as usize].start_time;
+            match raw.status_log_record(scan) {
+                Ok(record) => {
+                    with_status += 1;
+                    assert!(
+                        f64::from(record.time) <= rt + f64::EPSILON,
+                        "{name} scan {scan} sees a later record"
+                    );
+                    // The typed view reads the same record.
+                    assert!(raw.status_log_entry(scan).is_ok(), "{name} scan {scan}");
+                }
+                // A scan acquired before the first record has none; a scan
+                // number in range is never any other error.
+                Err(error) => assert_eq!(
+                    error.to_string(),
+                    sage_plus_raw::Error::InvalidScanNumber(scan).to_string(),
+                    "{name} scan {scan}"
+                ),
+            }
+        }
+        assert!(with_status > 0, "{name}");
+        // Out of range is out of range, with or without a status log.
+        assert!(raw.status_log_record(u32::MAX).is_err(), "{name}");
+    }
+}
+
 #[test]
 #[ignore = "requires downloaded public fixtures, run by CI"]
 fn dropping_the_per_scan_records_decodes_the_same_spectra() {
@@ -509,6 +588,15 @@ fn dropping_the_per_scan_records_decodes_the_same_spectra() {
         assert!(dropped.scan_parameters(first).is_err(), "{name}");
         assert!(dropped.status_log_entry(first).is_err(), "{name}");
         assert!(dropped.inst_log_record(first).is_err(), "{name}");
+        assert!(dropped.status_log_record(first).is_err(), "{name}");
+        // The status log's layout is still read and still checked when its
+        // records are not kept: only the records are missing.
+        assert_eq!(dropped.status_log_error(), None, "{name}");
+        assert_eq!(
+            dropped.inst_log_header.fields.len(),
+            kept.inst_log_header.fields.len(),
+            "{name}"
+        );
         // With the records, a scan that is not there is a scan number error,
         // not a missing stream.
         assert!(kept.scan_params(first).is_ok(), "{name}");

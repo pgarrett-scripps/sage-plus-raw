@@ -469,11 +469,21 @@ impl ScanTrailer {
 
 // -- Status log (instrument log) typed accessor --
 
+/// One instrument status-log record.
+#[derive(Debug)]
+pub struct StatusLogRecord {
+    /// Time the record was written, in minutes (the same scale as scan start
+    /// times).
+    pub time: f32,
+    /// The record's values, labelled by the status-log header.
+    pub record: GenericRecord,
+}
+
 /// Typed accessor for a per-scan instrument-status log entry.
 ///
 /// The instrument log records instrument-state values (temperatures, voltages,
-/// pressures, etc.) at the time each scan was acquired. The schema varies
-/// across instrument models.
+/// pressures, etc.) over time; a scan sees the last record written at or
+/// before its start time. The schema varies across instrument models.
 #[derive(Debug)]
 pub struct StatusLogEntry<'a>(pub &'a GenericRecord);
 
