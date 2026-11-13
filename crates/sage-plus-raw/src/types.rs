@@ -75,7 +75,7 @@ pub enum Ionization {
 
 /// An activation method, from ScanEventPreamble byte 24 or, for the two
 /// electron-transfer variants, from a qualified v66 reaction
-/// ([`crate::ScanEvent::qualified_activation`]).
+/// ([`crate::scan_event::ScanEvent::qualified_activation`]).
 ///
 /// Only codes with corpus evidence get a named variant (see `CORPUS.md` for
 /// the public PRIDE files):
