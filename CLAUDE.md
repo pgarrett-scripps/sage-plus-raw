@@ -46,15 +46,23 @@ are off limits. Several agents share this machine, so every workspace cargo buil
 goes through the scheduler:
 
 ```sh
-ajs submit --title "..." --description "..." --meta est=5m --cpu 4 --mem 6G --max-runtime 20m \
-  -- bash -lc 'cd /home/patrick-garrett/Repos/sage-plus-raw && cargo test --all-targets'
+ajs submit --title "sage-plus-raw local gate" --description "what this gates" --meta est=15m \
+  --cpu 6 --mem 12G --max-runtime 45m \
+  -- bash -lc '/home/patrick-garrett/Repos/sage-plus-raw/scripts/local-gate.sh'
 ```
 
-`cargo fmt` and `cargo check -p sage-plus-raw` run directly. Before a commit: `cargo fmt`, `cargo
-clippy --all-targets -- -D warnings` (0 warnings), `cargo test --all-targets`. Fuzz targets are in
-`crates/sage-plus-raw/fuzz` with their own `Cargo.lock`, used by CI with `--locked`, so a version
-bump must touch it too. Releases follow `RELEASING.md`: the tag push publishes to crates.io from CI,
-and only Ty approves one.
+`scripts/local-gate.sh` is the check to run before a commit, not a hand-written subset: it runs
+every one of the ten CI jobs that a single Linux machine can run, in the form CI runs it, labels
+each step with the job it stands for, and ends by printing what it covered, what it covered partly
+and what it could not. It keeps going after a failure, so one run names everything that is wrong;
+`LOCAL_GATE_PASSED` on the last line is the thing to look for. A subset is how a change can reach
+CI with a fuzz harness that no longer compiles: nine jobs pass and `fuzz smoke` fails, because the
+ad-hoc command covered the crate and not `crates/sage-plus-raw/fuzz`, which is its own workspace
+with its own `Cargo.lock` that CI resolves with `--locked`, so a version bump must touch it too.
+Only `cargo fmt` and a single-crate `cargo check -p sage-plus-raw` run directly.
+
+Releases follow `RELEASING.md`: the tag push publishes to crates.io from CI, and only Ty approves
+one.
 
 ## Fixtures
 

@@ -4,14 +4,36 @@ This repository maintains an independent fork of [OpenTFRaw](https://github.com/
 
 Submit focused changes as pull requests against [pgarrett-scripps/sage-plus-raw](https://github.com/pgarrett-scripps/sage-plus-raw). Open an issue first for larger changes. Preserve upstream attribution and describe changes to scientific output, supported acquisition modes and error behavior. Add independent regression evidence when changing a binary layout or metadata interpretation. Do not infer an activation method, calibration or acquisition classification from insufficient evidence.
 
-Run the following checks from the workspace root:
+## Checks
+
+Run the local gate from the workspace root. It is one command and it runs every CI check that a single Linux machine can run:
+
+```sh
+scripts/local-gate.sh
+```
+
+Each step is labelled with the CI job it stands for, every step runs even after one fails, and the summary at the end says what was covered. `LOCAL_GATE_PASSED` on the last line means every step that ran passed. Builds go to `$CARGO_TARGET_DIR`, or `~/.cache/sage-plus-raw-target` when that is unset, never into the checkout.
+
+Of the ten CI jobs:
+
+- Fully covered: `rustfmt`, `clippy`, `test (ubuntu-latest)`, `MSRV (1.85)`, `docs`, `cargo deny`, `publish dry-run`.
+- Partly covered: `fuzz smoke`. The gate resolves `crates/sage-plus-raw/fuzz` against its own `Cargo.lock`, compiles all three targets and regenerates the seed corpus, which is what catches a source change that breaks the harness. It does not fuzz: the libFuzzer runs need cargo-fuzz 0.13.1 under `nightly-2026-09-26` with AddressSanitizer, so only CI can find a crash.
+- Not covered: `test (macos-latest)` and `test (windows-latest)`, which need those hosts.
+
+A missing `cargo-deny` or 1.85 toolchain is reported as a skip with the command that installs it, not as a failure. Note that cargo-deny takes `--locked` before the subcommand, so `cargo deny check --locked` is not a valid command line; the gate runs `cargo deny check advisories licenses bans sources`, the four checks CI names.
+
+These are the commands the gate runs, if you need one of them on its own:
 
 ```sh
 cargo fmt --all --check
 cargo clippy --locked -p sage-plus-raw --all-targets -- -D warnings
 cargo test --locked -p sage-plus-raw
+cargo +1.85.0 build --locked -p sage-plus-raw --all-targets
 RUSTDOCFLAGS="-D warnings" cargo doc --locked -p sage-plus-raw --no-deps
-cargo deny check
+cargo deny check advisories licenses bans sources
+cargo package --locked -p sage-plus-raw --list
+cargo publish --locked -p sage-plus-raw --dry-run
+cargo check --locked --all-targets --manifest-path crates/sage-plus-raw/fuzz/Cargo.toml
 python3 scripts/fetch_public_fixtures.py
 python3 scripts/prepare_reference_arrays.py
 THERMO_PUBLIC_CORPUS=corpus/public cargo test --locked -p sage-plus-raw --test public_fixtures -- --ignored
