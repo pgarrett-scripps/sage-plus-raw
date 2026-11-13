@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Breaking (Rust):** `Peak::abundance` is `Peak::intensity`. The field, the locals that carry it and the text around it now use the term the rest of the crate already used for a peak's height: `SpectrumRecord::intensity`, `ScanIndexEntry::base_intensity`, the profile `(m/z, intensity)` pairs and every doc comment. Nothing else changes: the decoded `f32` is the same value read from the same bytes.
+
 ## [0.2.0] - 2026-11-12
 
 - **Breaking (Rust):** a reader no longer keeps a file's per-scan trailer and instrument-log records unless it is asked to. `OpenOptions::default` is now what `OpenOptions::spectra_only` is, so `RawFileReader::open`, `RawFileReader::open_path` and `SpectrumReader::open_path` keep only the compact `scan_trailers` table decoding reads: 550 MiB and 10 million allocations less for a 136k-scan Orbitrap file, which is a 3.91 GiB lower peak (11.651 to 7.745 GiB) and a 27.6% faster read stage on a five-file concurrent search in sage-plus. A caller that reads trailer or instrument-log fields beyond the ten decoding uses asks for the records with `OpenOptions::with_records` (or `OpenOptions::with_scan_parameters`/`with_instrument_log`) and `open_path_with`, and gets exactly what it got before.

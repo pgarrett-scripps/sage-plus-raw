@@ -223,17 +223,17 @@ fn main() {
                     match raw.read_scan_peaks(&mut file, scan_num) {
                         Ok(peaks) => {
                             let n_peaks = peaks.len();
-                            let peak_tic: f64 = peaks.iter().map(|p| p.abundance as f64).sum();
+                            let peak_tic: f64 = peaks.iter().map(|p| p.intensity as f64).sum();
                             let nonzero: Vec<_> =
-                                peaks.iter().filter(|p| p.abundance != 0.0).collect();
+                                peaks.iter().filter(|p| p.intensity != 0.0).collect();
                             println!("  Scan {} (evt={}): {} peaks ({} nonzero) | peak_tic={:.2e} vs index_tic={:.2e}",
                                 scan_num, idx_entry.scan_event, n_peaks, nonzero.len(),
                                 peak_tic, idx_entry.total_current);
                             if i == 0 {
                                 for (j, pk) in peaks.iter().enumerate().take(5) {
                                     println!(
-                                        "    Peak {}: m/z={:.4}, abundance={:.4}",
-                                        j, pk.mz, pk.abundance
+                                        "    Peak {}: m/z={:.4}, intensity={:.4}",
+                                        j, pk.mz, pk.intensity
                                     );
                                 }
                                 println!(
@@ -270,7 +270,7 @@ fn main() {
                             };
 
                             // Compute TIC from centroid peaks and compare
-                            let peak_tic: f64 = pkt.peaks.iter().map(|p| p.abundance as f64).sum();
+                            let peak_tic: f64 = pkt.peaks.iter().map(|p| p.intensity as f64).sum();
 
                             // Show scan event info
                             let evt = raw.scan_events.get(i as usize);
@@ -289,14 +289,14 @@ fn main() {
                             if i == 0 && !pkt.peaks.is_empty() {
                                 let mut sorted: Vec<_> = pkt.peaks.iter().collect();
                                 sorted
-                                    .sort_by(|a, b| b.abundance.partial_cmp(&a.abundance).unwrap());
+                                    .sort_by(|a, b| b.intensity.partial_cmp(&a.intensity).unwrap());
                                 let n_top = std::cmp::min(3, sorted.len());
                                 for (j, pk) in sorted[..n_top].iter().enumerate() {
                                     println!(
-                                        "    Top {}: m/z={:.4}, abundance={:.2e}",
+                                        "    Top {}: m/z={:.4}, intensity={:.2e}",
                                         j + 1,
                                         pk.mz,
-                                        pk.abundance
+                                        pk.intensity
                                     );
                                 }
                                 println!(

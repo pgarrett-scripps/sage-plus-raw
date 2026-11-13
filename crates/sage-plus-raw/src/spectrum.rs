@@ -644,7 +644,7 @@ fn fill_scan_arrays<R: Read + Seek, I: PeakIntensity>(
             return Ok((Some(crate::ScanMode::Profile), dropped));
         }
         let dropped = extend_valid_peaks(
-            packet.peaks.iter().map(|p| (p.mz, f64::from(p.abundance))),
+            packet.peaks.iter().map(|p| (p.mz, f64::from(p.intensity))),
             mz,
             intensity,
         );
@@ -662,8 +662,8 @@ fn fill_scan_arrays<R: Read + Seek, I: PeakIntensity>(
         mz.reserve(count);
         intensity.reserve(count);
         let mut dropped = 0;
-        crate::scan_data::for_each_peak(block, wide_mz, |peak_mz, abundance| {
-            let peak_intensity = f64::from(abundance);
+        crate::scan_data::for_each_peak(block, wide_mz, |peak_mz, raw_intensity| {
+            let peak_intensity = f64::from(raw_intensity);
             if valid_peak(peak_mz, peak_intensity) {
                 mz.push(peak_mz);
                 intensity.push(I::from_decoded(peak_intensity));
@@ -675,7 +675,7 @@ fn fill_scan_arrays<R: Read + Seek, I: PeakIntensity>(
     }
     let peaks = raw.read_peaks_only_with(source, scan_number, scratch)?;
     let dropped = extend_valid_peaks(
-        peaks.iter().map(|p| (p.mz, f64::from(p.abundance))),
+        peaks.iter().map(|p| (p.mz, f64::from(p.intensity))),
         mz,
         intensity,
     );

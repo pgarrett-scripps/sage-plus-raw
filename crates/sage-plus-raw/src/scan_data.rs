@@ -2,11 +2,11 @@ use crate::binary_reader::BinaryReader;
 use crate::error::{Error, Result};
 use std::io::{Read, Seek, SeekFrom};
 
-/// A single centroid peak (m/z + abundance).
+/// A single centroid peak (m/z + intensity).
 #[derive(Debug, Clone)]
 pub struct Peak {
     pub mz: f64,
-    pub abundance: f32,
+    pub intensity: f32,
 }
 
 /// A node in the per-scan noise-vs-m/z function carried by FT scans.
@@ -315,8 +315,8 @@ pub(crate) fn for_each_peak(block: &[u8], wide_mz: bool, mut visit: impl FnMut(f
 /// Collect a peak-list block into a `Vec<Peak>`.
 fn peaks_from_block(block: &[u8], wide_mz: bool) -> Vec<Peak> {
     let mut peaks = Vec::with_capacity(block.len() / peak_item_size(wide_mz));
-    for_each_peak(block, wide_mz, |mz, abundance| {
-        peaks.push(Peak { mz, abundance })
+    for_each_peak(block, wide_mz, |mz, intensity| {
+        peaks.push(Peak { mz, intensity })
     });
     peaks
 }
@@ -519,7 +519,7 @@ pub fn read_flat_peaks<R: Read + Seek>(
         for item in block.chunks_exact(8) {
             peaks.push(Peak {
                 mz: f64::from(f32::from_le_bytes([item[0], item[1], item[2], item[3]])),
-                abundance: f32::from_le_bytes([item[4], item[5], item[6], item[7]]),
+                intensity: f32::from_le_bytes([item[4], item[5], item[6], item[7]]),
             });
         }
 
@@ -588,7 +588,7 @@ pub fn read_scan_srm_v66<R: Read + Seek>(
         // Bytes 0-3 are the channel index, which this reader does not use.
         peaks.push(Peak {
             mz: f64::from(f32::from_le_bytes([item[4], item[5], item[6], item[7]])),
-            abundance: f32::from_le_bytes([item[8], item[9], item[10], item[11]]),
+            intensity: f32::from_le_bytes([item[8], item[9], item[10], item[11]]),
         });
     }
 
@@ -876,13 +876,13 @@ mod tests {
     /// (f32 m/z) or wide (f64 m/z) as the layout bit says.
     fn peak_list_bytes(peaks: &[(f64, f32)], wide_mz: bool) -> Vec<u8> {
         let mut bytes = (peaks.len() as u32).to_le_bytes().to_vec();
-        for (mz, abundance) in peaks {
+        for (mz, intensity) in peaks {
             if wide_mz {
                 bytes.extend_from_slice(&mz.to_le_bytes());
             } else {
                 bytes.extend_from_slice(&(*mz as f32).to_le_bytes());
             }
-            bytes.extend_from_slice(&abundance.to_le_bytes());
+            bytes.extend_from_slice(&intensity.to_le_bytes());
         }
         bytes
     }
@@ -900,11 +900,11 @@ mod tests {
             let mut r = BinaryReader::new(Cursor::new(bytes));
             let peaks = ScanDataPacket::read_peaks(&mut r, &header, &mut Vec::new()).unwrap();
             assert_eq!(peaks.len(), expected.len());
-            for (peak, (mz, abundance)) in peaks.iter().zip(expected) {
+            for (peak, (mz, intensity)) in peaks.iter().zip(expected) {
                 // Narrow m/z is an f32 widened, which is what the old
                 // field-at-a-time read produced too.
                 let mz = if wide_mz { mz } else { f64::from(mz as f32) };
-                assert_eq!((peak.mz, peak.abundance), (mz, abundance));
+                assert_eq!((peak.mz, peak.intensity), (mz, intensity));
             }
         }
     }
@@ -950,7 +950,7 @@ mod tests {
     #[test]
     fn read_flat_peaks_decodes_valid_record() {
         // data_addr=0, cum_end = end offset of this scan's record. One peak
-        // (mz=500.0, abundance=10.0) plus one trailing flag byte, so
+        // (mz=500.0, intensity=10.0) plus one trailing flag byte, so
         // data_size = peak_count(1) + 1 = 2.
         let mut bytes = vec![0u8; 100]; // leading padding
         let peak_start = bytes.len();
@@ -962,7 +962,7 @@ mod tests {
         let peaks = read_flat_peaks(&mut cursor, 0, cum_end, 2).unwrap();
         assert_eq!(peaks.len(), 1);
         assert_eq!(peaks[0].mz, 500.0);
-        assert_eq!(peaks[0].abundance, 10.0);
+        assert_eq!(peaks[0].intensity, 10.0);
         let _ = peak_start; // silence unused-var warning if layout changes
     }
 
@@ -996,7 +996,7 @@ mod tests {
         let peaks = read_scan_srm_v66(&mut cursor, 0, 0, 0).unwrap();
         assert_eq!(peaks.len(), 1);
         assert_eq!(peaks[0].mz, 105.0);
-        assert_eq!(peaks[0].abundance, 42.0);
+        assert_eq!(peaks[0].intensity, 42.0);
     }
 
     #[test]
@@ -1021,13 +1021,13 @@ mod tests {
 
     #[test]
     fn read_flat_peaks_decodes_every_peak_of_a_multi_peak_record() {
-        // The block read must decode the same (mz, abundance) pairs, in the
+        // The block read must decode the same (mz, intensity) pairs, in the
         // same order, that the field-at-a-time read did.
         let expected = [(500.0f32, 10.0f32), (600.5, 2.5), (700.25, 0.0)];
         let mut bytes = vec![0u8; 32]; // leading padding
-        for (mz, abundance) in expected {
+        for (mz, intensity) in expected {
             bytes.extend_from_slice(&mz.to_le_bytes());
-            bytes.extend_from_slice(&abundance.to_le_bytes());
+            bytes.extend_from_slice(&intensity.to_le_bytes());
         }
         // One trailing flag byte per peak: the section this reader seeks to
         // is `peak_count * 9` bytes from the end of the record.
@@ -1036,8 +1036,8 @@ mod tests {
         let mut cursor = Cursor::new(bytes);
         let peaks = read_flat_peaks(&mut cursor, 0, cum_end, expected.len() as u32 + 1).unwrap();
         assert_eq!(peaks.len(), expected.len());
-        for (peak, (mz, abundance)) in peaks.iter().zip(expected) {
-            assert_eq!((peak.mz, peak.abundance), (f64::from(mz), abundance));
+        for (peak, (mz, intensity)) in peaks.iter().zip(expected) {
+            assert_eq!((peak.mz, peak.intensity), (f64::from(mz), intensity));
         }
     }
 
@@ -1074,16 +1074,16 @@ mod tests {
             bytes.extend_from_slice(&(index as f32).to_le_bytes());
             bytes.extend_from_slice(&(index as f32 + 1.0).to_le_bytes());
         }
-        for (index, (mz, abundance)) in expected.iter().enumerate() {
+        for (index, (mz, intensity)) in expected.iter().enumerate() {
             bytes.extend_from_slice(&(index as u32).to_le_bytes()); // channel
             bytes.extend_from_slice(&mz.to_le_bytes());
-            bytes.extend_from_slice(&abundance.to_le_bytes());
+            bytes.extend_from_slice(&intensity.to_le_bytes());
         }
         let mut cursor = Cursor::new(bytes);
         let peaks = read_scan_srm_v66(&mut cursor, 0, 0, 0).unwrap();
         assert_eq!(peaks.len(), expected.len());
-        for (peak, (mz, abundance)) in peaks.iter().zip(expected) {
-            assert_eq!((peak.mz, peak.abundance), (f64::from(mz), abundance));
+        for (peak, (mz, intensity)) in peaks.iter().zip(expected) {
+            assert_eq!((peak.mz, peak.intensity), (f64::from(mz), intensity));
         }
     }
 
