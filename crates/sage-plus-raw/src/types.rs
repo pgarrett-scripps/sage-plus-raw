@@ -73,41 +73,37 @@ pub enum Ionization {
     GDI = 9,
 }
 
-/// Activation method from ScanEventPreamble byte 24.
+/// An activation method, from ScanEventPreamble byte 24 or, for the two
+/// electron-transfer variants, from a qualified v66 reaction
+/// ([`crate::ScanEvent::qualified_activation`]).
 ///
-/// Observed corpus values:
-///   0 = no activation (MS1 scans; treated as None by `from_byte`)
+/// Only codes with corpus evidence get a named variant (see `CORPUS.md` for
+/// the public PRIDE files):
+///   0 = no activation (MS1 scans; `from_byte` returns `None`)
 ///   1 = HCD (Q Exactive family; renders as "hcd")
 ///   4 = CID/HCD (Fusion/Exploris/Eclipse; renders as "cid" on ITMS, "hcd" on FTMS)
 ///
-/// Values 2, 3, 5-10, 12 are defined from Xcalibur firmware documentation
-/// but not yet confirmed across the current corpus.
+/// Every other byte-24 code decodes as [`Activation::Unknown`] carrying the
+/// raw byte. No public source documents a mapping for those codes, and the
+/// corpus has no MSn scan with a well-formed scan event that uses one
+/// (upstream OpenTFRaw eb79dff).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Activation {
-    /// Multi-photon induced dissociation (code 2).
-    MPID,
-    /// Electron transfer dissociation (code 3).
-    ETD,
     /// Higher-energy collisional dissociation - Q Exactive style (code 1).
     HCD,
     /// Collision-induced dissociation / beam-type HCD - Fusion/Exploris style (code 4).
     /// Renders as "cid" on ITMS analyzers, "hcd" on FTMS analyzers.
     CID,
-    /// Electron-capture dissociation (code 5).
-    ECD,
-    /// Infrared multiphoton dissociation (code 6).
-    IRMPD,
-    /// Proton transfer decay / activated-ion ETD (code 7).
-    PD,
-    /// Pulsed q dissociation (code 8).
-    PQD,
-    /// Ultraviolet photodissociation (code 9).
-    UVPD,
-    /// Surface-induced dissociation (code 10).
-    SID,
-    /// ETD with supplemental HCD (code 12).
-    /// Filter string: `@etd<e>@hcd<se>` - two activation clauses.
+    /// Electron transfer dissociation. Never decoded from byte 24, which does
+    /// not distinguish it: only from a qualified v66 reaction tag or the
+    /// preamble electron-transfer flag.
+    ETD,
+    /// Electron transfer dissociation with supplemental activation, from the
+    /// same qualified sources as [`Activation::ETD`].
+    /// Filter string: `@etd@hcd<se>` - two activation clauses.
     EThcD,
+    /// A non-zero byte-24 code with no established meaning. Holds the raw byte.
+    Unknown(u8),
 }
 
 /// Generic data field type codes.
@@ -256,41 +252,36 @@ impl Ionization {
 }
 
 impl Activation {
+    /// Decode byte 24. Returns `None` for 0 (no activation) and
+    /// [`Activation::Unknown`] for any code without an established meaning.
     pub fn from_byte(b: u8) -> Option<Self> {
         match b {
+            0 => None,
             1 => Some(Self::HCD),
-            2 => Some(Self::MPID),
-            3 => Some(Self::ETD),
             4 => Some(Self::CID),
-            5 => Some(Self::ECD),
-            6 => Some(Self::IRMPD),
-            7 => Some(Self::PD),
-            8 => Some(Self::PQD),
-            9 => Some(Self::UVPD),
-            10 => Some(Self::SID),
-            12 => Some(Self::EThcD),
-            _ => None,
+            other => Some(Self::Unknown(other)),
         }
     }
 
-    /// Short identifier used in Thermo scan filter strings (e.g. "hcd", "etd").
+    /// Whether this is a method byte 24 names, rather than a raw code or a
+    /// method only a qualified reaction establishes.
+    pub fn is_named_code(&self) -> bool {
+        matches!(self, Self::HCD | Self::CID)
+    }
+
+    /// Short identifier used in Thermo scan filter strings (e.g. "hcd", "cid").
     ///
     /// For [`Activation::CID`] on FTMS instruments the filter string conventionally
     /// uses "hcd" instead; callers should substitute via
-    /// [`crate::scan_filter::activation_str`].
+    /// [`crate::scan_filter::activation_str`]. [`Activation::Unknown`] returns
+    /// "unknown"; the scan filter builder omits the activation clause for it.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::HCD => "hcd",
-            Self::MPID => "mpid",
-            Self::ETD => "etd",
             Self::CID => "cid",
-            Self::ECD => "ecd",
-            Self::IRMPD => "irmpd",
-            Self::PD => "pd",
-            Self::PQD => "pqd",
-            Self::UVPD => "uvpd",
-            Self::SID => "sid",
+            Self::ETD => "etd",
             Self::EThcD => "ethcd",
+            Self::Unknown(_) => "unknown",
         }
     }
 }

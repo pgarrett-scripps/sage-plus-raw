@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Breaking (Rust):** `Activation` names only the byte-24 codes with corpus evidence, `HCD` (1) and `CID` (4). Every other non-zero code decodes as the new `Activation::Unknown(u8)`, which holds the raw byte, and `Activation::from_byte(0)` is `None`. The `MPID`, `ECD`, `IRMPD`, `PD`, `PQD`, `UVPD` and `SID` variants are removed: no public source documents those codes, and the corpus has no MSn scan with a well-formed scan event that uses one. `ETD` and `EThcD` stay, because this fork decodes them from a qualified v66 reaction tag or the preamble electron-transfer flag rather than from byte 24, and the preamble electron-transfer flag is now read only for a scan whose byte 24 is `HCD` or `CID` (new `Activation::is_named_code`). An `Unknown` activation renders no `@<method>` clause. Decoded filter strings and spectra are unchanged on every public fixture (upstream OpenTFRaw eb79dff).
 - **Breaking (Rust):** `Peak::abundance` is `Peak::intensity`. The field, the locals that carry it and the text around it now use the term the rest of the crate already used for a peak's height: `SpectrumRecord::intensity`, `ScanIndexEntry::base_intensity`, the profile `(m/z, intensity)` pairs and every doc comment. Nothing else changes: the decoded `f32` is the same value read from the same bytes.
 
 ## [0.2.0] - 2026-11-12

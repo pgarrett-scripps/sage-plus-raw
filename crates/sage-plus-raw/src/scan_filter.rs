@@ -147,6 +147,9 @@ pub(crate) fn build_filter_with_activation_into(
     out: &mut String,
 ) {
     out.clear();
+    // An unrecognised activation code gets no `@<method>` clause: the raw
+    // byte is not a method name (upstream OpenTFRaw eb79dff).
+    let activation = activation.filter(|a| !matches!(a, Activation::Unknown(_)));
     let p = &event.preamble;
     let analyzer = p.analyzer();
 
@@ -583,6 +586,65 @@ mod tests {
             event(etd_preamble(0), reactions()).qualified_activation(64),
             None
         );
+    }
+
+    #[test]
+    fn only_the_two_corpus_attested_codes_are_named_methods() {
+        // Byte 24 names HCD (1) and CID (4). Every other non-zero code is
+        // the raw byte, carries no method name, and renders no clause; the
+        // electron-transfer flag is not read for one either.
+        assert_eq!(Activation::from_byte(0), None);
+        assert_eq!(Activation::from_byte(1), Some(Activation::HCD));
+        assert_eq!(Activation::from_byte(4), Some(Activation::CID));
+        for code in [2u8, 3, 5, 6, 7, 8, 9, 10, 12, 200, 255] {
+            let decoded = Activation::from_byte(code);
+            assert_eq!(decoded, Some(Activation::Unknown(code)));
+            assert_eq!(decoded.unwrap().as_str(), "unknown");
+            assert!(!decoded.unwrap().is_named_code());
+            let mut pre = etd_preamble(4);
+            pre.bytes[24] = code;
+            let ev = event(pre, vec![reaction(467.1021, 0)]);
+            assert_eq!(ev.qualified_activation(66), None);
+        }
+        assert!(Activation::HCD.is_named_code());
+        assert!(Activation::CID.is_named_code());
+        assert!(!Activation::ETD.is_named_code());
+        assert!(!Activation::EThcD.is_named_code());
+
+        // The renderer omits the clause rather than writing the raw byte.
+        let idx = make_index(150.0, 2000.0);
+        let mut pre = make_preamble(1, 0, 2, 0);
+        pre.bytes[10] = 1; // dependent
+        pre.bytes[40] = 4; // FTMS
+        pre.bytes[24] = 12;
+        let ev = ScanEvent {
+            preamble: pre,
+            reactions: vec![],
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        };
+        // This fork reports no activation from the preamble at all, and an
+        // `Unknown` reaching the renderer from anywhere else is still no
+        // method name.
+        assert_eq!(ev.preamble.activation(), None);
+        assert_eq!(
+            Activation::from_byte(ev.preamble.activation_byte()),
+            Some(Activation::Unknown(12))
+        );
+        for activation in [None, Some(Activation::Unknown(12))] {
+            assert_eq!(
+                build_filter_with_activation(
+                    &ev,
+                    &idx,
+                    Some(649.12),
+                    Some(35.0),
+                    Some(28.0),
+                    activation,
+                    None,
+                ),
+                "FTMS + c NSI d Full ms2 649.1200 [150.0000-2000.0000]"
+            );
+        }
     }
 
     #[test]

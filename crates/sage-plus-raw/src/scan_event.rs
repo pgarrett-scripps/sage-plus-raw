@@ -184,12 +184,15 @@ impl ScanEvent {
     /// Activation from the preamble electron-transfer flag, for events whose
     /// reaction tag is unresolved.
     ///
-    /// The flag is only read when byte 24 holds a named activation code:
-    /// misread scan events also set it, mostly with byte 24 zero or out of
-    /// range (upstream OpenTFRaw 47e2b76).
+    /// The flag is only read when byte 24 holds a named activation code,
+    /// which is HCD (1) or CID (4) and nothing else: misread scan events also
+    /// set it, mostly with byte 24 zero or out of range (upstream OpenTFRaw
+    /// 47e2b76), and no public source documents the other codes (upstream
+    /// OpenTFRaw eb79dff).
     fn electron_transfer_activation(&self) -> Option<crate::Activation> {
         if !self.preamble.is_electron_transfer()
-            || crate::Activation::from_byte(self.preamble.activation_byte()).is_none()
+            || !crate::Activation::from_byte(self.preamble.activation_byte())
+                .is_some_and(|activation| activation.is_named_code())
         {
             return None;
         }

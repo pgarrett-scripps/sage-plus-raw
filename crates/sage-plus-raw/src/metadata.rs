@@ -167,10 +167,10 @@ impl<'a> ScanParams<'a> {
     /// Activation energy (eV or %) for the primary activation step.
     ///
     /// Tries several label variants present across instrument families.
-    /// NCE (normalized collision energy) labels are checked first because
-    /// they reflect the user-set method value and are what reference tools
-    /// (ThermoRawFileParser, Proteome Discoverer) report.  eV labels are
-    /// used as a fallback when no NCE label is present.
+    /// NCE (normalized collision energy) labels are checked first, so a scan
+    /// that carries both reports its NCE value. eV labels are used only when
+    /// no NCE label is present. [`Self::activation_energy_is_nce`] says which
+    /// kind was found.
     ///
     /// Label priority:
     /// 1. `"HCD Energy:"` / `"HCD Energy V:"` / `"CE:"` - NCE string form
